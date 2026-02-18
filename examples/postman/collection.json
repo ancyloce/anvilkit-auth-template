@@ -4,70 +4,172 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    {"key": "base_url_auth", "value": "http://localhost:8080"},
-    {"key": "base_url_admin", "value": "http://localhost:8081"},
-    {"key": "access_token", "value": ""},
-    {"key": "refresh_token", "value": ""},
-    {"key": "tenant_id", "value": ""}
+    {
+      "key": "base_url_auth",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "base_url_admin",
+      "value": "http://localhost:8081"
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "refresh_token",
+      "value": ""
+    },
+    {
+      "key": "tenant_id",
+      "value": ""
+    }
   ],
   "item": [
     {
       "name": "bootstrap",
       "request": {
         "method": "POST",
-        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "url": "{{base_url_auth}}/api/v1/auth/bootstrap",
-        "body": {"mode": "raw", "raw": "{\n  \"email\": \"postman@example.com\",\n  \"password\": \"passw0rd!\",\n  \"tenant_name\": \"postman-tenant\"\n}"}
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"postman@example.com\",\n  \"password\": \"passw0rd!\",\n  \"tenant_name\": \"postman-tenant\"\n}"
+        }
       },
-      "event": [{"listen": "test", "script": {"exec": [
-        "const b = pm.response.json();",
-        "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
-        "pm.collectionVariables.set('access_token', b.data.access_token);",
-        "pm.collectionVariables.set('refresh_token', b.data.refresh_token);",
-        "pm.collectionVariables.set('tenant_id', b.data.tenant_id);"
-      ]}}]
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
+              "pm.collectionVariables.set('access_token', b.data.access_token);",
+              "pm.collectionVariables.set('refresh_token', b.data.refresh_token);",
+              "pm.collectionVariables.set('tenant_id', b.data.tenant_id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "register",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url_auth}}/v1/auth/register",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"register@example.com\",\n  \"password\": \"Passw0rd!\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('status created', ()=> pm.expect(pm.response.code).to.eql(201));",
+              "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
+              "pm.test('has user id', ()=> pm.expect(b.data.user.id).to.be.a('string'));"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "login",
       "request": {
         "method": "POST",
-        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "url": "{{base_url_auth}}/api/v1/auth/login",
-        "body": {"mode": "raw", "raw": "{\n  \"email\": \"postman@example.com\",\n  \"password\": \"passw0rd!\",\n  \"tenant_id\": \"{{tenant_id}}\"\n}"}
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"postman@example.com\",\n  \"password\": \"passw0rd!\",\n  \"tenant_id\": \"{{tenant_id}}\"\n}"
+        }
       },
-      "event": [{"listen": "test", "script": {"exec": [
-        "const b = pm.response.json();",
-        "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
-        "pm.collectionVariables.set('access_token', b.data.access_token);",
-        "pm.collectionVariables.set('refresh_token', b.data.refresh_token);"
-      ]}}]
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
+              "pm.collectionVariables.set('access_token', b.data.access_token);",
+              "pm.collectionVariables.set('refresh_token', b.data.refresh_token);"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "refresh",
       "request": {
         "method": "POST",
-        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "url": "{{base_url_auth}}/api/v1/auth/refresh",
-        "body": {"mode": "raw", "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"}
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+        }
       },
-      "event": [{"listen": "test", "script": {"exec": [
-        "const b = pm.response.json();",
-        "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
-        "pm.collectionVariables.set('access_token', b.data.access_token);",
-        "pm.collectionVariables.set('refresh_token', b.data.refresh_token);"
-      ]}}]
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
+              "pm.collectionVariables.set('access_token', b.data.access_token);",
+              "pm.collectionVariables.set('refresh_token', b.data.refresh_token);"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "admin me roles",
       "request": {
         "method": "GET",
-        "header": [{"key": "Authorization", "value": "Bearer {{access_token}}"}],
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          }
+        ],
         "url": "{{base_url_admin}}/api/v1/admin/tenants/{{tenant_id}}/me/roles"
       },
-      "event": [{"listen": "test", "script": {"exec": [
-        "const b = pm.response.json();",
-        "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));"
-      ]}}]
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

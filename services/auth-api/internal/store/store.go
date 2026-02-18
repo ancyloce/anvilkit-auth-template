@@ -21,6 +21,11 @@ type BootstrapResult struct {
 	Email    string
 }
 
+type RegisteredUser struct {
+	ID    string
+	Email string
+}
+
 func hashPassword(pwd string) (string, error) {
 	b, err := bcrypt.GenerateFromPassword([]byte(pwd), 12)
 	return string(b), err
@@ -30,14 +35,32 @@ func verifyPassword(hash, pwd string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pwd)) == nil
 }
 
-func (s *Store) Register(ctx context.Context, email, password string) (string, error) {
+func (s *Store) Register(ctx context.Context, email, password string) (*RegisteredUser, error) {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
 	id := uuid.NewString()
 	h, err := hashPassword(password)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	_, err = s.DB.Exec(ctx, `insert into users(id,email,password_hash,created_at) values($1,$2,$3,now())`, id, email, h)
-	return id, err
+	if _, err = tx.Exec(ctx, `insert into users(id,email,status,created_at,updated_at) values($1,$2,1,now(),now())`, id, email); err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `insert into user_password_credentials(user_id,password_hash,updated_at) values($1,$2,now())`, id, h); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &RegisteredUser{ID: id, Email: email}, nil
 }
 
 func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName string) (*BootstrapResult, error) {
