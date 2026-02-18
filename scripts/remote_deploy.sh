@@ -41,11 +41,14 @@ ensure_env_file() {
 upsert_env() {
   local key="$1"
   local value="$2"
-  local escaped
-  escaped=$(printf '%s' "$value" | sed -e 's/[\\&]/\\\\&/g')
 
-  if rg -n "^${key}=" "$ENV_FILE" >/dev/null; then
-    sed -i "s|^${key}=.*|${key}=${escaped}|" "$ENV_FILE"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    awk -v k="$key" -v v="$value" '
+      BEGIN { found=0 }
+      $0 ~ "^" k "=" { print k "=" v; found=1; next }
+      { print }
+      END { if (!found) print k "=" v }
+    ' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
   else
     printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
   fi
@@ -75,7 +78,7 @@ chmod 600 "$ENV_FILE"
 echo "Checking required env keys in $DEPLOY_PATH/.env"
 grep -E '^(JWT_ISSUER|JWT_AUDIENCE|JWT_SECRET)=' "$ENV_FILE" | sed 's/=.*/=<redacted>/'
 
-if rg -n '\$\{file\}' "$COMPOSE_FILE" >/dev/null; then
+if grep -qF '${file}' "$COMPOSE_FILE"; then
   echo "compose file still contains forbidden variable interpolation token <dollar-brace-file>" >&2
   exit 1
 fi
