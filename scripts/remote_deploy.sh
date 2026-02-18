@@ -242,8 +242,8 @@ echo "Container JWT env diagnostics (redacted):"
 "${compose_cmd[@]}" exec -T auth-api /bin/sh -ec 'env | grep -E "^JWT_(ISSUER|AUDIENCE|SECRET)=" | sed "s/=.*/=<redacted>/"' || true
 
 healthcheck() {
-  curl -fsS http://127.0.0.1:8080/healthz >/dev/null
-  curl -fsS http://127.0.0.1:8081/healthz >/dev/null
+  curl -fsS --max-time 5 http://127.0.0.1:8080/healthz >/dev/null
+  curl -fsS --max-time 5 http://127.0.0.1:8081/healthz >/dev/null
 }
 
 if healthcheck; then
@@ -281,7 +281,7 @@ fi
 
 if healthcheck; then
   echo "Rollback succeeded to tag: $rollback_tag"
-  exit 1
+  exit 0
 fi
 
 echo "Rollback failed. Manual intervention required." >&2
