@@ -1,0 +1,7 @@
+### me roles
+GET http://localhost:8081/api/v1/admin/tenants/{{tenant_id}}/me/roles
+Authorization: Bearer {{access_token}}
+
+### assign role
+POST http://localhost:8081/api/v1/admin/tenants/{{tenant_id}}/users/{{user_id}}/roles/org_admin
+Authorization: Bearer {{access_token}}

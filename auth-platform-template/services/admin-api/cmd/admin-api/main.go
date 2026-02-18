@@ -1,0 +1,50 @@
+package main
+
+import (
+	"context"
+	"log"
+	"path/filepath"
+
+	"auth-platform-template/modules/common-go/pkg/cfg"
+	"auth-platform-template/modules/common-go/pkg/db/pgsql"
+	"auth-platform-template/modules/common-go/pkg/httpx/ginmid"
+	"auth-platform-template/services/admin-api/internal/handler"
+	"auth-platform-template/services/admin-api/internal/store"
+	"github.com/casbin/casbin/v2"
+	"github.com/gin-gonic/gin"
+)
+
+func main() {
+	ctx := context.Background()
+	db, err := pgsql.New(ctx, cfg.GetString("DB_DSN", "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	rbacDir := cfg.GetString("RBAC_DIR", "internal/rbac")
+	e, err := casbin.NewEnforcer(filepath.Join(rbacDir, "model.conf"), filepath.Join(rbacDir, "policy.csv"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	h := &handler.Handler{Store: &store.Store{DB: db}, Enforcer: e}
+	secret := cfg.GetString("JWT_SECRET", "dev-secret-change-me")
+
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(ginmid.RequestID())
+	r.Use(ginmid.Logger())
+	r.Use(ginmid.CORS(cfg.GetList("CORS_ALLOW_ORIGINS"), cfg.GetBool("CORS_ALLOW_CREDENTIALS", false)))
+	r.Use(ginmid.ErrorHandler())
+
+	r.NoRoute(handler.NotFound)
+	r.GET("/healthz", ginmid.Wrap(h.Healthz))
+
+	admin := r.Group("/api/v1/admin", ginmid.AuthN(secret), handler.MustTenantMatch())
+	admin.GET("/tenants/:tenantId/me/roles", ginmid.Wrap(h.MeRoles))
+	admin.POST("/tenants/:tenantId/users/:userId/roles/:role", ginmid.Wrap(h.AssignRole))
+
+	if err := r.Run(":8081"); err != nil {
+		log.Fatal(err)
+	}
+}
