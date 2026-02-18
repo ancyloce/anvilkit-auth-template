@@ -17,6 +17,8 @@ on:
         default: false
         type: boolean
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
@@ -41,6 +43,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Diagnostic trigger context
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          INPUTS_JSON: ${{ toJson(github.event.inputs) }}
+        run: |
+          echo "event_name=${EVENT_NAME}"
+          echo "ref=${REF}"
+          echo "ref_name=${REF_NAME}"
+          echo "ref_type=${REF_TYPE}"
+          echo "sha=${SHA}"
+          echo "actor=${ACTOR}"
+          echo "inputs=${INPUTS_JSON}"
 
       - name: Prepare image owner
         id: prep
@@ -139,14 +159,14 @@ jobs:
           cors_credentials="${CORS_ALLOW_CREDENTIALS:-false}"
 
           cat > .deploy.env <<EOF_ENV
-DB_DSN=${DB_DSN}
-REDIS_ADDR=${REDIS_ADDR}
-JWT_SECRET=${JWT_SECRET}
-CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
-ACCESS_TTL_MIN=${access_ttl}
-REFRESH_TTL_HOURS=${refresh_ttl}
-CORS_ALLOW_CREDENTIALS=${cors_credentials}
-EOF_ENV
+          DB_DSN=${DB_DSN}
+          REDIS_ADDR=${REDIS_ADDR}
+          JWT_SECRET=${JWT_SECRET}
+          CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
+          ACCESS_TTL_MIN=${access_ttl}
+          REFRESH_TTL_HOURS=${refresh_ttl}
+          CORS_ALLOW_CREDENTIALS=${cors_credentials}
+          EOF_ENV
           chmod 600 .deploy.env
 
       - name: Ensure remote .env exists (or overwrite)
