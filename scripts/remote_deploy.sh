@@ -73,6 +73,14 @@ export IMAGE_TAG="$DEPLOY_TAG"
 
 compose_cmd=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 
+migration_file="$DEPLOY_PATH/migrations/001_init.sql"
+if [[ ! -f "$migration_file" ]]; then
+  echo "missing migration file: $migration_file (workflow 未上传迁移文件)" >&2
+  echo "Diagnostics: ls -la $DEPLOY_PATH/migrations" >&2
+  ls -la "$DEPLOY_PATH/migrations" >&2 || true
+  exit 1
+fi
+
 echo "Logging in to ghcr.io as ${GHCR_USERNAME}"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
 trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
@@ -115,6 +123,8 @@ run_migrate() {
 if ! run_migrate; then
   echo "Migration failed. Diagnostics:" >&2
   docker ps >&2 || true
+  echo "Diagnostics: ls -la $DEPLOY_PATH/migrations" >&2
+  ls -la "$DEPLOY_PATH/migrations" >&2 || true
   if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
     "${compose_cmd[@]}" logs pg --tail=200 >&2 || true
   fi

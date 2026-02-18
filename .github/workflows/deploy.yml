@@ -252,14 +252,14 @@ jobs:
         run: |
           port="${DEPLOY_PORT:-22}"
           ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
-            "mkdir -p '$DEPLOY_PATH/deploy' '$DEPLOY_PATH/scripts' '$DEPLOY_PATH/services/auth-api/migrations'"
+            "mkdir -p '$DEPLOY_PATH/deploy' '$DEPLOY_PATH/scripts' '$DEPLOY_PATH/migrations'"
 
           scp -P "$port" -o StrictHostKeyChecking=accept-new deploy/docker-compose.prod.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/deploy/docker-compose.prod.yml"
           scp -P "$port" -o StrictHostKeyChecking=accept-new scripts/remote_deploy.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/scripts/remote_deploy.sh"
           scp -P "$port" -o StrictHostKeyChecking=accept-new services/auth-api/migrations/001_init.sql \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/services/auth-api/migrations/001_init.sql"
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/migrations/001_init.sql"
 
       - name: Run remote deployment
         env:

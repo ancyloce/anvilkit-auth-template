@@ -37,7 +37,7 @@ services:
       pg:
         condition: service_healthy
     volumes:
-      - ./services/auth-api/migrations:/migrations:ro
+      - ./migrations:/migrations:ro
     entrypoint:
       - /bin/sh
       - -ec
