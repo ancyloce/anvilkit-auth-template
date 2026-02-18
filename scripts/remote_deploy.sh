@@ -16,6 +16,7 @@ GHCR_TOKEN="${GHCR_TOKEN:-}"
 COMPOSE_FILE="$DEPLOY_PATH/deploy/docker-compose.prod.yml"
 STATE_FILE="$DEPLOY_PATH/.deploy_state"
 ENV_FILE="$DEPLOY_PATH/.env"
+PROJECT_DIRECTORY="$DEPLOY_PATH"
 
 mkdir -p "$DEPLOY_PATH"
 
@@ -70,7 +71,14 @@ echo "USE_INTERNAL_DEPS: $USE_INTERNAL_DEPS"
 export IMAGE_OWNER
 export IMAGE_TAG="$DEPLOY_TAG"
 
-compose_cmd=(docker compose --project-directory "$DEPLOY_PATH" --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+compose_cmd=(docker compose --project-directory "$PROJECT_DIRECTORY" --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+
+echo "Compose diagnostics:"
+echo "  pwd: $(pwd)"
+echo "  DEPLOY_PATH: $DEPLOY_PATH"
+echo "  project-directory: $PROJECT_DIRECTORY"
+echo "  compose file: $COMPOSE_FILE"
+echo "  env file path: $ENV_FILE"
 
 migration_file="$DEPLOY_PATH/migrations/001_init.sql"
 if [[ ! -f "$migration_file" ]]; then
