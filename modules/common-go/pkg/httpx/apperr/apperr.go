@@ -4,8 +4,9 @@ import (
 	"errors"
 	"net/http"
 
-	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 )
 
 type AppError struct {

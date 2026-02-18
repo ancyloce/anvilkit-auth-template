@@ -4,9 +4,10 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+
 	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
-	"github.com/gin-gonic/gin"
 )
 
 func AuthN(secret string) gin.HandlerFunc {
