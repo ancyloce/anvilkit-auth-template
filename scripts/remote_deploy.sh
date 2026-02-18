@@ -32,6 +32,11 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+if rg -n '\$\{file\}' "$COMPOSE_FILE" >/dev/null; then
+  echo "compose file still contains forbidden variable interpolation token <dollar-brace-file>" >&2
+  exit 1
+fi
+
 if [[ -z "$GHCR_USERNAME" || -z "$GHCR_TOKEN" ]]; then
   echo "missing GHCR credentials: GHCR_USERNAME and GHCR_TOKEN are required for pulling private images" >&2
   exit 1

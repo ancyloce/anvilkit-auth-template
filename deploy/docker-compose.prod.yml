@@ -46,9 +46,14 @@ services:
       - |
         echo "Running DB migration..."
         ls -la /migrations
-        for f in $(ls -1 /migrations/*.sql | sort); do
-          echo "Applying migration: $$f"
-          psql "$$DB_DSN" -v ON_ERROR_STOP=1 -f "$$f"
+        set -- /migrations/*.sql
+        if [ ! -e "$1" ]; then
+          echo "No migration SQL files found under /migrations" >&2
+          exit 1
+        fi
+        for f in "$@"; do
+          echo "Applying migration: $f"
+          psql "$DB_DSN" -v ON_ERROR_STOP=1 -f "$f"
         done
         echo "DB migration completed."
 
