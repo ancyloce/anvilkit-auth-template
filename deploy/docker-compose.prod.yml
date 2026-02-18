@@ -32,12 +32,12 @@ services:
     image: postgres:16
     restart: "no"
     env_file:
-      - ../.env
+      - .env
     depends_on:
       pg:
         condition: service_healthy
     volumes:
-      - ./migrations:/migrations:ro
+      - ../migrations:/migrations:ro
     entrypoint:
       - /bin/sh
       - -ec
@@ -50,7 +50,7 @@ services:
     image: ghcr.io/${IMAGE_OWNER}/anvilkit-auth-template-auth-api:${IMAGE_TAG}
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     depends_on:
       pg:
         condition: service_healthy
@@ -70,7 +70,7 @@ services:
     image: ghcr.io/${IMAGE_OWNER}/anvilkit-auth-template-admin-api:${IMAGE_TAG}
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     depends_on:
       pg:
         condition: service_healthy

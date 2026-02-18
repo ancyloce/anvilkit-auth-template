@@ -243,6 +243,9 @@ jobs:
             fi
           fi
 
+          ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+            "test -f '$DEPLOY_PATH/.env' && echo 'Verified env file path: $DEPLOY_PATH/.env'"
+
       - name: Upload deployment assets
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
