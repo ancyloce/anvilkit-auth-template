@@ -2,17 +2,15 @@
 FROM golang:1.22 AS build
 WORKDIR /src
 
-# Copy workspace metadata so go.work can resolve every module it references.
-COPY go.mod /src/go.mod
-COPY go.sum /src/go.sum
+# Copy workspace metadata and referenced modules.
 COPY go.work /src/go.work
-
-# Copy all modules referenced by go.work.
 COPY modules/common-go /src/modules/common-go
 COPY services/auth-api /src/services/auth-api
 COPY services/admin-api /src/services/admin-api
 
-RUN go work sync
+# Remove root workspace entry for container builds to avoid depending on root go.mod/go.sum.
+RUN go work edit -dropuse . && go work sync
+
 WORKDIR /src/services/auth-api
 RUN go mod download && go build -o /out/auth-api ./cmd/auth-api
 
