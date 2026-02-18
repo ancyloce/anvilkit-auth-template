@@ -3,8 +3,9 @@ package handler
 import (
 	"errors"
 
-	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"github.com/gin-gonic/gin"
+
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 )
 
 func MustTenantMatch() gin.HandlerFunc {

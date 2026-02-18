@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/casbin/casbin/v2"
+	"github.com/gin-gonic/gin"
+
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
 	"anvilkit-auth-template/services/admin-api/internal/store"
-	"github.com/casbin/casbin/v2"
-	"github.com/gin-gonic/gin"
 )
 
 type Handler struct {

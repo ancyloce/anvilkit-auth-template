@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
+
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 )
 
 func RateLimit(rdb *goredis.Client, keyPrefix string, limit int, window time.Duration) gin.HandlerFunc {
