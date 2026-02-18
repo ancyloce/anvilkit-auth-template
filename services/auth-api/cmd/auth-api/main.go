@@ -32,10 +32,11 @@ func main() {
 	}
 
 	h := &handler.Handler{
-		Store:      &store.Store{DB: db},
-		JWTSecret:  authCfg.JWTSecret,
-		AccessTTL:  authCfg.AccessTTL,
-		RefreshTTL: authCfg.RefreshTTL,
+		Store:          &store.Store{DB: db},
+		JWTSecret:      authCfg.JWTSecret,
+		AccessTTL:      authCfg.AccessTTL,
+		RefreshTTL:     authCfg.RefreshTTL,
+		PasswordMinLen: authCfg.PasswordMinLen,
 	}
 
 	r := gin.New()
@@ -54,6 +55,9 @@ func main() {
 	api.POST("/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
 	api.POST("/refresh", ginmid.Wrap(h.Refresh))
 	api.POST("/logout", ginmid.AuthN(h.JWTSecret), ginmid.Wrap(h.Logout))
+
+	v1 := r.Group("/v1/auth")
+	v1.POST("/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
 
 	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)

@@ -3,7 +3,9 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -18,10 +20,11 @@ import (
 )
 
 type Handler struct {
-	Store      *store.Store
-	JWTSecret  string
-	AccessTTL  time.Duration
-	RefreshTTL time.Duration
+	Store          *store.Store
+	JWTSecret      string
+	AccessTTL      time.Duration
+	RefreshTTL     time.Duration
+	PasswordMinLen int
 }
 
 type authReq struct {
@@ -60,15 +63,32 @@ func (h *Handler) Bootstrap(c *gin.Context) error {
 }
 
 func (h *Handler) Register(c *gin.Context) error {
-	var req authReq
+	var req struct {
+		Email    string `json:"email" binding:"required"`
+		Password string `json:"password" binding:"required"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		return apperr.BadRequest(err)
 	}
-	uid, err := h.Store.Register(c, req.Email, req.Password)
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	if _, err := mail.ParseAddress(email); err != nil {
+		return apperr.BadRequest(fmt.Errorf("invalid_email"))
+	}
+	if len(req.Password) < h.PasswordMinLen {
+		return apperr.BadRequest(fmt.Errorf("password_too_short"))
+	}
+	user, err := h.Store.Register(c, email, req.Password)
 	if err != nil {
 		return err
 	}
-	resp.OK(c, map[string]any{"user_id": uid})
+	c.JSON(http.StatusCreated, resp.Envelope{
+		RequestID: c.GetString("request_id"),
+		Code:      0,
+		Message:   "ok",
+		Data: map[string]any{
+			"user": map[string]any{"id": user.ID, "email": user.Email},
+		},
+	})
 	return nil
 }
 
