@@ -45,7 +45,11 @@ func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName strin
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
 
 	uid := ""
 	pwdHash := ""
@@ -110,7 +114,11 @@ func (s *Store) RotateRefreshToken(ctx context.Context, oldToken, newToken strin
 	if err != nil {
 		return "", "", err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
 
 	var uid, tid string
 	err = tx.QueryRow(ctx, `
