@@ -2,11 +2,15 @@
 FROM golang:1.22 AS build
 WORKDIR /src
 
-COPY go.mod ./go.mod
-COPY go.work ./go.work
-COPY modules/common-go ./modules/common-go
-COPY services/auth-api ./services/auth-api
-COPY services/admin-api ./services/admin-api
+# Copy workspace metadata so go.work can resolve every module it references.
+COPY go.mod /src/go.mod
+COPY go.sum /src/go.sum
+COPY go.work /src/go.work
+
+# Copy all modules referenced by go.work.
+COPY modules/common-go /src/modules/common-go
+COPY services/auth-api /src/services/auth-api
+COPY services/admin-api /src/services/admin-api
 
 RUN go work sync
 WORKDIR /src/services/auth-api
