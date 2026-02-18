@@ -125,7 +125,7 @@ func newRegisterRouter(db *pgxpool.Pool, passwordMinLen int) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(ginmid.RequestID(), ginmid.ErrorHandler())
-	h := &Handler{Store: &store.Store{DB: db}, PasswordMinLen: passwordMinLen}
+	h := &Handler{Store: &store.Store{DB: db}, PasswordMinLen: passwordMinLen, BcryptCost: 4}
 	r.POST("/v1/auth/register", ginmid.Wrap(h.Register))
 	return r
 }

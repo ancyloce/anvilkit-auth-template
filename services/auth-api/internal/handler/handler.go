@@ -25,6 +25,7 @@ type Handler struct {
 	AccessTTL      time.Duration
 	RefreshTTL     time.Duration
 	PasswordMinLen int
+	BcryptCost     int
 }
 
 type authReq struct {
@@ -47,7 +48,7 @@ func (h *Handler) Bootstrap(c *gin.Context) error {
 	if strings.TrimSpace(req.Tenant) == "" {
 		return apperr.BadRequest(errors.New("tenant_name_required"))
 	}
-	res, err := h.Store.Bootstrap(c, req.Email, req.Password, req.Tenant)
+	res, err := h.Store.Bootstrap(c, req.Email, req.Password, req.Tenant, h.BcryptCost)
 	if err != nil {
 		if err.Error() == "invalid_password" {
 			return apperr.Unauthorized(err)
@@ -77,7 +78,7 @@ func (h *Handler) Register(c *gin.Context) error {
 	if len(req.Password) < h.PasswordMinLen {
 		return apperr.BadRequest(fmt.Errorf("password_too_short"))
 	}
-	user, err := h.Store.Register(c, email, req.Password)
+	user, err := h.Store.Register(c, email, req.Password, h.BcryptCost)
 	if err != nil {
 		return err
 	}
