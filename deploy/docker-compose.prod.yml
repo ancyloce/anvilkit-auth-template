@@ -45,7 +45,10 @@ services:
       - -ec
       - |
         echo "Running DB migration..."
-        psql "$DB_DSN" -v ON_ERROR_STOP=1 -f /migrations/001_init.sql
+        for file in $(find /migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+          echo "Applying migration: ${file}"
+          psql "$DB_DSN" -v ON_ERROR_STOP=1 -f "${file}"
+        done
         echo "DB migration completed."
 
   auth-api:

@@ -61,7 +61,10 @@ jobs:
           exit 1
 
       - name: Migrate database
-        run: psql "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable" -f services/auth-api/migrations/001_init.sql
+        run: |
+          for file in $(find services/auth-api/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+            psql "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable" -v ON_ERROR_STOP=1 -f "$file"
+          done
 
       - name: Run module tests
         env:
