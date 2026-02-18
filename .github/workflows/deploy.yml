@@ -273,11 +273,26 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env.example"
           scp -P "$port" -o StrictHostKeyChecking=accept-new scripts/remote_deploy.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/scripts/remote_deploy.sh"
-          scp -P "$port" -o StrictHostKeyChecking=accept-new services/auth-api/migrations/*.sql \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/migrations/"
 
+          # Stream all migrations as a tar archive and extract atomically on the remote.
+          # This avoids scp glob expansion issues and ensures every file arrives intact.
+          local_count=$(ls -1 services/auth-api/migrations/*.sql | wc -l)
+          tar -C services/auth-api/migrations -cf - $(ls -1 services/auth-api/migrations/*.sql | sort | xargs -n1 basename) \
+            | ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+              "tar -C '$DEPLOY_PATH/migrations' -xf -"
+
+          # Verify remote count matches local count — no hardcoded filenames.
+          remote_count=$(ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+            "ls -1 '$DEPLOY_PATH/migrations'/*.sql 2>/dev/null | wc -l")
+          if [[ "$remote_count" -ne "$local_count" ]]; then
+            echo "::error::Migration file count mismatch: local=$local_count remote=$remote_count" >&2
+            ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+              "ls -la '$DEPLOY_PATH/migrations'" >&2
+            exit 1
+          fi
+          echo "Migrations uploaded: $remote_count file(s)"
           ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
-            "ls -la '$DEPLOY_PATH/migrations' && test -f '$DEPLOY_PATH/migrations/002_authn_core.sql'"
+            "ls -la '$DEPLOY_PATH/migrations'"
 
       - name: Run remote deployment
         env:

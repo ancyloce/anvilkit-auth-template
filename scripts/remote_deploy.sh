@@ -147,18 +147,6 @@ echo "  project_name: $COMPOSE_PROJECT_NAME"
 echo "MIGRATIONS_DIR=$MIGRATIONS_DIR"
 ls -la "$MIGRATIONS_DIR"
 
-migration_file="$MIGRATIONS_DIR/002_authn_core.sql"
-if [[ ! -f "$migration_file" ]]; then
-  echo "missing required migration file: $migration_file (workflow 未上传完整迁移文件)" >&2
-  echo "Diagnostics: pwd" >&2
-  pwd >&2
-  echo "Diagnostics: ls -la $DEPLOY_PATH" >&2
-  ls -la "$DEPLOY_PATH" >&2 || true
-  echo "Diagnostics: ls -la $MIGRATIONS_DIR" >&2
-  ls -la "$MIGRATIONS_DIR" >&2 || true
-  exit 1
-fi
-
 if ! compgen -G "$MIGRATIONS_DIR/*.sql" >/dev/null; then
   echo "no SQL migrations found under $MIGRATIONS_DIR" >&2
   exit 1
