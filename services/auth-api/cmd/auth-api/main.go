@@ -5,12 +5,12 @@ import (
 	"log"
 	"time"
 
-	"auth-platform-template/modules/common-go/pkg/cache/redis"
-	"auth-platform-template/modules/common-go/pkg/cfg"
-	"auth-platform-template/modules/common-go/pkg/db/pgsql"
-	"auth-platform-template/modules/common-go/pkg/httpx/ginmid"
-	"auth-platform-template/services/auth-api/internal/handler"
-	"auth-platform-template/services/auth-api/internal/store"
+	"anvilkit-auth-template/modules/common-go/pkg/cache/redis"
+	"anvilkit-auth-template/modules/common-go/pkg/cfg"
+	"anvilkit-auth-template/modules/common-go/pkg/db/pgsql"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
+	"anvilkit-auth-template/services/auth-api/internal/handler"
+	"anvilkit-auth-template/services/auth-api/internal/store"
 	"github.com/gin-gonic/gin"
 )
 

@@ -5,11 +5,11 @@ import (
 	"log"
 	"path/filepath"
 
-	"auth-platform-template/modules/common-go/pkg/cfg"
-	"auth-platform-template/modules/common-go/pkg/db/pgsql"
-	"auth-platform-template/modules/common-go/pkg/httpx/ginmid"
-	"auth-platform-template/services/admin-api/internal/handler"
-	"auth-platform-template/services/admin-api/internal/store"
+	"anvilkit-auth-template/modules/common-go/pkg/cfg"
+	"anvilkit-auth-template/modules/common-go/pkg/db/pgsql"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
+	"anvilkit-auth-template/services/admin-api/internal/handler"
+	"anvilkit-auth-template/services/admin-api/internal/store"
 	"github.com/casbin/casbin/v2"
 	"github.com/gin-gonic/gin"
 )

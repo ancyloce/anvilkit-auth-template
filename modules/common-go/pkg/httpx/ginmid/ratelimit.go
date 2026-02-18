@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"auth-platform-template/modules/common-go/pkg/httpx/apperr"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
 )

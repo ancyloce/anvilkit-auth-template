@@ -1,4 +1,4 @@
-module auth-platform-template/modules/common-go
+module anvilkit-auth-template/modules/common-go
 
 go 1.22
 

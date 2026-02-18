@@ -25,16 +25,55 @@ jobs:
         image: redis:7
         ports:
           - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - name: install psql
+
+      - name: Prepare Go workspace dependencies
+        run: |
+          go work sync
+          for dir in modules/common-go services/auth-api services/admin-api; do
+            (cd "$dir" && go mod download)
+          done
+
+      - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
-      - name: migrate
+
+      - name: Wait for Postgres readiness
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U postgres -d auth; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Postgres did not become ready in time" >&2
+          exit 1
+
+      - name: Migrate database
         run: psql "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable" -f services/auth-api/migrations/001_init.sql
-      - name: test
+
+      - name: Run module tests
+        env:
+          DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
+          REDIS_ADDR: localhost:6379
+          JWT_SECRET: test-secret
+        run: |
+          for dir in modules/common-go services/auth-api services/admin-api; do
+            (cd "$dir" && go test ./... -count=1)
+          done
+
+      - name: Run workspace root tests
         env:
           DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
           REDIS_ADDR: localhost:6379
@@ -43,11 +82,31 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module-dir: modules/common-go
+            lint-path: ./modules/common-go/...
+          - module-dir: services/auth-api
+            lint-path: ./services/auth-api/...
+          - module-dir: services/admin-api
+            lint-path: ./services/admin-api/...
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+
+      - name: Prepare Go workspace dependencies
+        run: |
+          go work sync
+          (cd "${{ matrix.module-dir }}" && go mod download)
+
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.61
+          version: v1.57.2
+          args: --timeout=5m ${{ matrix.lint-path }}

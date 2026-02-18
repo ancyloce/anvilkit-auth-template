@@ -1,4 +1,4 @@
-# auth-platform-template
+# anvilkit-auth-template
 
 Open-source style starter template for a multi-tenant auth platform built from day one with two microservices:
 

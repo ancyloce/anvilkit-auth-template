@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"auth-platform-template/modules/common-go/pkg/httpx/apperr"
-	"auth-platform-template/modules/common-go/pkg/httpx/errcode"
-	"auth-platform-template/modules/common-go/pkg/httpx/resp"
-	"auth-platform-template/services/admin-api/internal/store"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
+	"anvilkit-auth-template/services/admin-api/internal/store"
 	"github.com/casbin/casbin/v2"
 	"github.com/gin-gonic/gin"
 )
