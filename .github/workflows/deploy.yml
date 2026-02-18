@@ -138,6 +138,8 @@ jobs:
         env:
           DB_DSN: ${{ secrets.DB_DSN }}
           REDIS_ADDR: ${{ secrets.REDIS_ADDR }}
+          JWT_ISSUER: ${{ secrets.JWT_ISSUER }}
+          JWT_AUDIENCE: ${{ secrets.JWT_AUDIENCE }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -148,7 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=()
-          for name in DB_DSN REDIS_ADDR JWT_SECRET CORS_ALLOW_ORIGINS DEPLOY_SSH_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_PATH; do
+          for name in DB_DSN REDIS_ADDR JWT_ISSUER JWT_AUDIENCE JWT_SECRET CORS_ALLOW_ORIGINS DEPLOY_SSH_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_PATH; do
             if [[ -z "${!name:-}" ]]; then
               missing+=("$name")
             fi
@@ -157,7 +159,7 @@ jobs:
           if ((${#missing[@]} > 0)); then
             echo "::error::Missing required secrets for deploy environment: ${missing[*]}"
             echo "Please configure these secrets in GitHub Environment '${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'production' }}'."
-            echo "Required app secrets: DB_DSN, REDIS_ADDR, JWT_SECRET, CORS_ALLOW_ORIGINS"
+            echo "Required app secrets: DB_DSN, REDIS_ADDR, JWT_ISSUER, JWT_AUDIENCE, JWT_SECRET, CORS_ALLOW_ORIGINS"
             echo "Required deploy secrets: DEPLOY_SSH_KEY, DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH (DEPLOY_PORT optional; defaults to 22)"
             exit 1
           fi
@@ -172,6 +174,8 @@ jobs:
         env:
           DB_DSN: ${{ secrets.DB_DSN }}
           REDIS_ADDR: ${{ secrets.REDIS_ADDR }}
+          JWT_ISSUER: ${{ secrets.JWT_ISSUER }}
+          JWT_AUDIENCE: ${{ secrets.JWT_AUDIENCE }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
           ACCESS_TTL_MIN: ${{ secrets.ACCESS_TTL_MIN }}
@@ -180,6 +184,8 @@ jobs:
           USE_INTERNAL_DEPS: ${{ vars.USE_INTERNAL_DEPS }}
         run: |
           set -euo pipefail
+          : "${JWT_ISSUER:?missing required secret JWT_ISSUER}"
+          : "${JWT_AUDIENCE:?missing required secret JWT_AUDIENCE}"
           : "${JWT_SECRET:?missing required secret JWT_SECRET}"
           : "${CORS_ALLOW_ORIGINS:?missing required secret CORS_ALLOW_ORIGINS}"
 
@@ -205,6 +211,8 @@ jobs:
           cat > .deploy.env <<EOF_ENV
           DB_DSN=${db_dsn}
           REDIS_ADDR=${redis_addr}
+          JWT_ISSUER=${JWT_ISSUER}
+          JWT_AUDIENCE=${JWT_AUDIENCE}
           JWT_SECRET=${JWT_SECRET}
           CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
           ACCESS_TTL_MIN=${access_ttl}
@@ -261,6 +269,8 @@ jobs:
 
           scp -P "$port" -o StrictHostKeyChecking=accept-new deploy/docker-compose.prod.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/deploy/docker-compose.prod.yml"
+          scp -P "$port" -o StrictHostKeyChecking=accept-new .env.example \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env.example"
           scp -P "$port" -o StrictHostKeyChecking=accept-new scripts/remote_deploy.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/scripts/remote_deploy.sh"
           scp -P "$port" -o StrictHostKeyChecking=accept-new services/auth-api/migrations/*.sql \
@@ -280,18 +290,43 @@ jobs:
           USE_INTERNAL_DEPS: ${{ vars.USE_INTERNAL_DEPS }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          DB_DSN: ${{ secrets.DB_DSN }}
+          REDIS_ADDR: ${{ secrets.REDIS_ADDR }}
+          JWT_ISSUER: ${{ secrets.JWT_ISSUER }}
+          JWT_AUDIENCE: ${{ secrets.JWT_AUDIENCE }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
+          ACCESS_TTL_MIN: ${{ secrets.ACCESS_TTL_MIN }}
+          REFRESH_TTL_HOURS: ${{ secrets.REFRESH_TTL_HOURS }}
+          CORS_ALLOW_CREDENTIALS: ${{ secrets.CORS_ALLOW_CREDENTIALS }}
         run: |
           set -euo pipefail
           : "${GHCR_USERNAME:?missing required secret GHCR_USERNAME}"
           : "${GHCR_TOKEN:?missing required secret GHCR_TOKEN}"
+          : "${JWT_ISSUER:?missing required secret JWT_ISSUER}"
+          : "${JWT_AUDIENCE:?missing required secret JWT_AUDIENCE}"
+          : "${JWT_SECRET:?missing required secret JWT_SECRET}"
 
           port="${DEPLOY_PORT:-22}"
           deps="${USE_INTERNAL_DEPS:-true}"
           ghcr_username_escaped=$(printf '%q' "$GHCR_USERNAME")
           ghcr_token_escaped=$(printf '%q' "$GHCR_TOKEN")
+          db_dsn_escaped=$(printf '%q' "${DB_DSN:-}")
+          redis_addr_escaped=$(printf '%q' "${REDIS_ADDR:-}")
+          jwt_issuer_escaped=$(printf '%q' "$JWT_ISSUER")
+          jwt_audience_escaped=$(printf '%q' "$JWT_AUDIENCE")
+          jwt_secret_escaped=$(printf '%q' "$JWT_SECRET")
+          cors_allow_origins_escaped=$(printf '%q' "${CORS_ALLOW_ORIGINS:-}")
+          access_ttl_min_escaped=$(printf '%q' "${ACCESS_TTL_MIN:-}")
+          refresh_ttl_hours_escaped=$(printf '%q' "${REFRESH_TTL_HOURS:-}")
+          cors_allow_credentials_escaped=$(printf '%q' "${CORS_ALLOW_CREDENTIALS:-}")
           ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
             "chmod +x '$DEPLOY_PATH/scripts/remote_deploy.sh' && \
              GHCR_USERNAME=$ghcr_username_escaped GHCR_TOKEN=$ghcr_token_escaped \
+             DB_DSN=$db_dsn_escaped REDIS_ADDR=$redis_addr_escaped \
+             JWT_ISSUER=$jwt_issuer_escaped JWT_AUDIENCE=$jwt_audience_escaped JWT_SECRET=$jwt_secret_escaped \
+             CORS_ALLOW_ORIGINS=$cors_allow_origins_escaped ACCESS_TTL_MIN=$access_ttl_min_escaped \
+             REFRESH_TTL_HOURS=$refresh_ttl_hours_escaped CORS_ALLOW_CREDENTIALS=$cors_allow_credentials_escaped \
              '$DEPLOY_PATH/scripts/remote_deploy.sh' '$DEPLOY_PATH' '$IMAGE_TAG' '$IMAGE_OWNER' '$deps'"
 
       - name: Cleanup local deploy env artifact

@@ -24,6 +24,33 @@ export DEPLOY_PATH
 export MIGRATIONS_DIR
 export IMAGE_OWNER
 
+
+ensure_env_file() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    if [[ -f "$DEPLOY_PATH/.env.example" ]]; then
+      cp "$DEPLOY_PATH/.env.example" "$ENV_FILE"
+    elif [[ -f "$PROJECT_DIRECTORY/.env.example" ]]; then
+      cp "$PROJECT_DIRECTORY/.env.example" "$ENV_FILE"
+    else
+      : > "$ENV_FILE"
+    fi
+    chmod 600 "$ENV_FILE"
+  fi
+}
+
+upsert_env() {
+  local key="$1"
+  local value="$2"
+  local escaped
+  escaped=$(printf '%s' "$value" | sed -e 's/[\\&]/\\\\&/g')
+
+  if rg -n "^${key}=" "$ENV_FILE" >/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${escaped}|" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
 mkdir -p "$DEPLOY_PATH"
 
 if [[ ! -f "$COMPOSE_FILE" ]]; then
@@ -31,10 +58,22 @@ if [[ ! -f "$COMPOSE_FILE" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "missing $ENV_FILE in $DEPLOY_PATH; please create it with production secrets" >&2
-  exit 1
-fi
+ensure_env_file
+
+upsert_env "DB_DSN" "${DB_DSN:-}"
+upsert_env "REDIS_ADDR" "${REDIS_ADDR:-}"
+upsert_env "JWT_ISSUER" "${JWT_ISSUER:-}"
+upsert_env "JWT_AUDIENCE" "${JWT_AUDIENCE:-}"
+upsert_env "JWT_SECRET" "${JWT_SECRET:-}"
+upsert_env "CORS_ALLOW_ORIGINS" "${CORS_ALLOW_ORIGINS:-}"
+upsert_env "ACCESS_TTL_MIN" "${ACCESS_TTL_MIN:-15}"
+upsert_env "REFRESH_TTL_HOURS" "${REFRESH_TTL_HOURS:-168}"
+upsert_env "CORS_ALLOW_CREDENTIALS" "${CORS_ALLOW_CREDENTIALS:-false}"
+
+chmod 600 "$ENV_FILE"
+
+echo "Checking required env keys in $DEPLOY_PATH/.env"
+grep -E '^(JWT_ISSUER|JWT_AUDIENCE|JWT_SECRET)=' "$ENV_FILE" | sed 's/=.*/=<redacted>/'
 
 if rg -n '\$\{file\}' "$COMPOSE_FILE" >/dev/null; then
   echo "compose file still contains forbidden variable interpolation token <dollar-brace-file>" >&2
@@ -45,6 +84,13 @@ if [[ -z "$GHCR_USERNAME" || -z "$GHCR_TOKEN" ]]; then
   echo "missing GHCR credentials: GHCR_USERNAME and GHCR_TOKEN are required for pulling private images" >&2
   exit 1
 fi
+
+for required_var in JWT_ISSUER JWT_AUDIENCE JWT_SECRET; do
+  if [[ -z "${!required_var:-}" ]]; then
+    echo "missing required env var from workflow: ${required_var}" >&2
+    exit 1
+  fi
+done
 
 db_dsn="$(awk -F= '/^DB_DSN=/{sub(/^DB_DSN=/,""); print; exit}' "$ENV_FILE")"
 if [[ -z "$db_dsn" ]]; then
@@ -188,6 +234,9 @@ if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
 else
   "${compose_cmd[@]}" up -d --no-deps auth-api admin-api
 fi
+
+echo "Container JWT env diagnostics (redacted):"
+"${compose_cmd[@]}" exec -T auth-api /bin/sh -ec 'env | grep -E "^JWT_(ISSUER|AUDIENCE|SECRET)=" | sed "s/=.*/=<redacted>/"' || true
 
 healthcheck() {
   curl -fsS http://127.0.0.1:8080/healthz >/dev/null
