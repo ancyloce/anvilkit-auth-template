@@ -7,13 +7,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
+
 	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
 	"anvilkit-auth-template/modules/common-go/pkg/util"
 	"anvilkit-auth-template/services/auth-api/internal/store"
-	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5"
 )
 
 type Handler struct {
