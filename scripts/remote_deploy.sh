@@ -13,12 +13,11 @@ USE_INTERNAL_DEPS="${4:-true}"
 GHCR_USERNAME="${GHCR_USERNAME:-}"
 GHCR_TOKEN="${GHCR_TOKEN:-}"
 
-COMPOSE_FILE="deploy/docker-compose.prod.yml"
-STATE_FILE=".deploy_state"
-ENV_FILE=".env"
+COMPOSE_FILE="$DEPLOY_PATH/deploy/docker-compose.prod.yml"
+STATE_FILE="$DEPLOY_PATH/.deploy_state"
+ENV_FILE="$DEPLOY_PATH/.env"
 
 mkdir -p "$DEPLOY_PATH"
-cd "$DEPLOY_PATH"
 
 if [[ ! -f "$COMPOSE_FILE" ]]; then
   echo "missing $COMPOSE_FILE in $DEPLOY_PATH" >&2
@@ -71,7 +70,28 @@ echo "USE_INTERNAL_DEPS: $USE_INTERNAL_DEPS"
 export IMAGE_OWNER
 export IMAGE_TAG="$DEPLOY_TAG"
 
-compose_cmd=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+compose_cmd=(docker compose --project-directory "$DEPLOY_PATH" --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+
+migration_file="$DEPLOY_PATH/migrations/001_init.sql"
+if [[ ! -f "$migration_file" ]]; then
+  echo "missing migration file: $migration_file (workflow 未上传迁移文件)" >&2
+  echo "Diagnostics: pwd" >&2
+  pwd >&2
+  echo "Diagnostics: ls -la $DEPLOY_PATH" >&2
+  ls -la "$DEPLOY_PATH" >&2 || true
+  echo "Diagnostics: ls -la $DEPLOY_PATH/migrations" >&2
+  ls -la "$DEPLOY_PATH/migrations" >&2 || true
+  exit 1
+fi
+
+echo "Resolved compose migrate volume config:"
+"${compose_cmd[@]}" config | awk '
+  /^  migrate:/ {in_migrate=1}
+  in_migrate && /^  [^ ]/ && $1 != "migrate:" {in_migrate=0}
+  in_migrate && /^    volumes:/ {in_volumes=1; print; next}
+  in_migrate && in_volumes && /^      - / {print; next}
+  in_migrate && in_volumes && !/^      - / {in_volumes=0}
+'
 
 echo "Logging in to ghcr.io as ${GHCR_USERNAME}"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
@@ -115,6 +135,12 @@ run_migrate() {
 if ! run_migrate; then
   echo "Migration failed. Diagnostics:" >&2
   docker ps >&2 || true
+  echo "Diagnostics: pwd" >&2
+  pwd >&2
+  echo "Diagnostics: ls -la $DEPLOY_PATH" >&2
+  ls -la "$DEPLOY_PATH" >&2 || true
+  echo "Diagnostics: ls -la $DEPLOY_PATH/migrations" >&2
+  ls -la "$DEPLOY_PATH/migrations" >&2 || true
   if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
     "${compose_cmd[@]}" logs pg --tail=200 >&2 || true
   fi
