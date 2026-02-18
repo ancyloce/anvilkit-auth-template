@@ -90,8 +90,9 @@ jobs:
           IMAGE_OWNER: ${{ steps.prep.outputs.owner_lc }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          cp .env.example deploy/.env
+          cp .env.example .env
           docker compose --env-file .env.example -f deploy/docker-compose.prod.yml config > /dev/null
+          rm -f .env
 
       - name: Build and push auth-api image
         uses: docker/build-push-action@v6
@@ -175,22 +176,40 @@ jobs:
           ACCESS_TTL_MIN: ${{ secrets.ACCESS_TTL_MIN }}
           REFRESH_TTL_HOURS: ${{ secrets.REFRESH_TTL_HOURS }}
           CORS_ALLOW_CREDENTIALS: ${{ secrets.CORS_ALLOW_CREDENTIALS }}
+          USE_INTERNAL_DEPS: ${{ vars.USE_INTERNAL_DEPS }}
         run: |
           set -euo pipefail
+          : "${JWT_SECRET:?missing required secret JWT_SECRET}"
+          : "${CORS_ALLOW_ORIGINS:?missing required secret CORS_ALLOW_ORIGINS}"
+
+          deps="${USE_INTERNAL_DEPS:-true}"
+          db_dsn="${DB_DSN:-postgres://postgres:postgres@pg:5432/auth?sslmode=disable}"
+          redis_addr="${REDIS_ADDR:-redis:6379}"
+
+          if [[ "$db_dsn" == *"@127.0.0.1:"* || "$db_dsn" == *"@localhost:"* ]]; then
+            if [[ "$deps" == "true" ]]; then
+              db_dsn="postgres://postgres:postgres@pg:5432/auth?sslmode=disable"
+              echo "DB_DSN points to localhost/127.0.0.1; overriding to internal compose service host pg:5432."
+            else
+              echo "DB_DSN points to localhost/127.0.0.1, which is invalid for containerized deploy with USE_INTERNAL_DEPS=false." >&2
+              echo "Set DB_DSN to a reachable external DB host/IP (not localhost)." >&2
+              exit 1
+            fi
+          fi
 
           access_ttl="${ACCESS_TTL_MIN:-15}"
           refresh_ttl="${REFRESH_TTL_HOURS:-168}"
           cors_credentials="${CORS_ALLOW_CREDENTIALS:-false}"
 
-          {
-            echo "DB_DSN=${DB_DSN}"
-            echo "REDIS_ADDR=${REDIS_ADDR}"
-            echo "JWT_SECRET=${JWT_SECRET}"
-            echo "CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}"
-            echo "ACCESS_TTL_MIN=${access_ttl}"
-            echo "REFRESH_TTL_HOURS=${refresh_ttl}"
-            echo "CORS_ALLOW_CREDENTIALS=${cors_credentials}"
-          } > .deploy.env
+          cat > .deploy.env <<EOF_ENV
+          DB_DSN=${db_dsn}
+          REDIS_ADDR=${redis_addr}
+          JWT_SECRET=${JWT_SECRET}
+          CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
+          ACCESS_TTL_MIN=${access_ttl}
+          REFRESH_TTL_HOURS=${refresh_ttl}
+          CORS_ALLOW_CREDENTIALS=${cors_credentials}
+          EOF_ENV
           chmod 600 .deploy.env
 
       - name: Ensure remote .env exists (or overwrite)
@@ -251,11 +270,20 @@ jobs:
           IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
           IMAGE_OWNER: ${{ needs.build.outputs.image_owner }}
           USE_INTERNAL_DEPS: ${{ vars.USE_INTERNAL_DEPS }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
+          set -euo pipefail
+          : "${GHCR_USERNAME:?missing required secret GHCR_USERNAME}"
+          : "${GHCR_TOKEN:?missing required secret GHCR_TOKEN}"
+
           port="${DEPLOY_PORT:-22}"
           deps="${USE_INTERNAL_DEPS:-true}"
+          ghcr_username_escaped=$(printf '%q' "$GHCR_USERNAME")
+          ghcr_token_escaped=$(printf '%q' "$GHCR_TOKEN")
           ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
             "chmod +x '$DEPLOY_PATH/scripts/remote_deploy.sh' && \
+             GHCR_USERNAME=$ghcr_username_escaped GHCR_TOKEN=$ghcr_token_escaped \
              '$DEPLOY_PATH/scripts/remote_deploy.sh' '$DEPLOY_PATH' '$IMAGE_TAG' '$IMAGE_OWNER' '$deps'"
 
       - name: Cleanup local deploy env artifact

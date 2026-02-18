@@ -10,6 +10,8 @@ DEPLOY_PATH="$1"
 DEPLOY_TAG="$2"
 IMAGE_OWNER="$3"
 USE_INTERNAL_DEPS="${4:-true}"
+GHCR_USERNAME="${GHCR_USERNAME:-}"
+GHCR_TOKEN="${GHCR_TOKEN:-}"
 
 COMPOSE_FILE="deploy/docker-compose.prod.yml"
 STATE_FILE=".deploy_state"
@@ -28,6 +30,28 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+if [[ -z "$GHCR_USERNAME" || -z "$GHCR_TOKEN" ]]; then
+  echo "missing GHCR credentials: GHCR_USERNAME and GHCR_TOKEN are required for pulling private images" >&2
+  exit 1
+fi
+
+db_dsn="$(awk -F= '/^DB_DSN=/{sub(/^DB_DSN=/,""); print; exit}' "$ENV_FILE")"
+if [[ -z "$db_dsn" ]]; then
+  echo "missing DB_DSN in $ENV_FILE" >&2
+  exit 1
+fi
+
+is_local_db="false"
+if [[ "$db_dsn" == *"@127.0.0.1:"* || "$db_dsn" == *"@localhost:"* ]]; then
+  is_local_db="true"
+fi
+
+if [[ "$is_local_db" == "true" ]]; then
+  echo "DB_DSN in $ENV_FILE points to localhost/127.0.0.1, which is invalid for container-to-container DB access." >&2
+  echo "Use postgres://...@pg:5432/... for internal DB, or an external DB host/IP for external DB." >&2
+  exit 1
+fi
+
 current_tag=""
 prev_tag=""
 if [[ -f "$STATE_FILE" ]]; then
@@ -42,18 +66,66 @@ rollback_tag="${current_tag:-$prev_tag}"
 echo "Deploying image tag: $DEPLOY_TAG"
 echo "Current tag: ${current_tag:-<none>}"
 echo "Previous tag: ${prev_tag:-<none>}"
+echo "USE_INTERNAL_DEPS: $USE_INTERNAL_DEPS"
 
 export IMAGE_OWNER
 export IMAGE_TAG="$DEPLOY_TAG"
 
 compose_cmd=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
-if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
-  compose_cmd+=(--profile with-deps)
-fi
+
+echo "Logging in to ghcr.io as ${GHCR_USERNAME}"
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
+trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
 "${compose_cmd[@]}" pull auth-api admin-api
-"${compose_cmd[@]}" run --rm migrate
-"${compose_cmd[@]}" up -d auth-api admin-api
+
+if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
+  echo "Starting internal dependencies (pg, redis)..."
+  "${compose_cmd[@]}" up -d pg redis
+
+  echo "Waiting for pg to become healthy..."
+  for i in {1..30}; do
+    pg_container_id="$("${compose_cmd[@]}" ps -q pg)"
+    if [[ -n "$pg_container_id" ]]; then
+      pg_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$pg_container_id" 2>/dev/null || true)"
+    else
+      pg_status=""
+    fi
+
+    if [[ "$pg_status" == "healthy" || "$pg_status" == "running" ]]; then
+      echo "pg is healthy/running (status: $pg_status)."
+      break
+    fi
+
+    if [[ "$i" -eq 30 ]]; then
+      echo "pg did not become healthy in time." >&2
+      "${compose_cmd[@]}" ps >&2 || true
+      "${compose_cmd[@]}" logs pg --tail=200 >&2 || true
+      exit 1
+    fi
+
+    sleep 2
+  done
+fi
+
+run_migrate() {
+  "${compose_cmd[@]}" run --rm migrate
+}
+
+if ! run_migrate; then
+  echo "Migration failed. Diagnostics:" >&2
+  docker ps >&2 || true
+  if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
+    "${compose_cmd[@]}" logs pg --tail=200 >&2 || true
+  fi
+  exit 1
+fi
+
+if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
+  "${compose_cmd[@]}" up -d auth-api admin-api
+else
+  "${compose_cmd[@]}" up -d --no-deps auth-api admin-api
+fi
 
 healthcheck() {
   curl -fsS http://127.0.0.1:8080/healthz >/dev/null
@@ -78,7 +150,11 @@ fi
 
 export IMAGE_TAG="$rollback_tag"
 "${compose_cmd[@]}" pull auth-api admin-api
-"${compose_cmd[@]}" up -d auth-api admin-api
+if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
+  "${compose_cmd[@]}" up -d auth-api admin-api
+else
+  "${compose_cmd[@]}" up -d --no-deps auth-api admin-api
+fi
 
 if healthcheck; then
   echo "Rollback succeeded to tag: $rollback_tag"
