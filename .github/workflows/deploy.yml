@@ -68,8 +68,6 @@ jobs:
           push: true
           tags: ${{ steps.meta_auth.outputs.tags }}
           labels: ${{ steps.meta_auth.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Generate admin-api metadata
         id: meta_admin
@@ -88,8 +86,6 @@ jobs:
           push: true
           tags: ${{ steps.meta_admin.outputs.tags }}
           labels: ${{ steps.meta_admin.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   deploy:
     runs-on: ubuntu-latest
