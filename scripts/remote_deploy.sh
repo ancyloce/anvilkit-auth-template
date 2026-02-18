@@ -90,9 +90,9 @@ echo "  env_file: $ENV_FILE"
 echo "  MIGRATIONS_DIR: $MIGRATIONS_DIR"
 echo "  project_name: $COMPOSE_PROJECT_NAME"
 
-migration_file="$MIGRATIONS_DIR/001_init.sql"
+migration_file="$MIGRATIONS_DIR/002_authn_core.sql"
 if [[ ! -f "$migration_file" ]]; then
-  echo "missing migration file: $migration_file (workflow 未上传迁移文件)" >&2
+  echo "missing required migration file: $migration_file (workflow 未上传完整迁移文件)" >&2
   echo "Diagnostics: pwd" >&2
   pwd >&2
   echo "Diagnostics: ls -la $DEPLOY_PATH" >&2
@@ -102,8 +102,12 @@ if [[ ! -f "$migration_file" ]]; then
   exit 1
 fi
 
+if ! compgen -G "$MIGRATIONS_DIR/*.sql" >/dev/null; then
+  echo "no SQL migrations found under $MIGRATIONS_DIR" >&2
+  exit 1
+fi
+
 echo "Preflight checks..."
-test -f "$migration_file"
 "${compose_cmd[@]}" config >/dev/null
 
 echo "Resolved compose migrate volume config:"
