@@ -12,11 +12,13 @@ IMAGE_OWNER="$3"
 USE_INTERNAL_DEPS="${4:-true}"
 GHCR_USERNAME="${GHCR_USERNAME:-}"
 GHCR_TOKEN="${GHCR_TOKEN:-}"
+COMPOSE_PROJECT_NAME="anvilkit-auth"
 
 COMPOSE_FILE="$DEPLOY_PATH/deploy/docker-compose.prod.yml"
 STATE_FILE="$DEPLOY_PATH/.deploy_state"
 ENV_FILE="$DEPLOY_PATH/.env"
 PROJECT_DIRECTORY="$DEPLOY_PATH"
+MIGRATIONS_DIR="$DEPLOY_PATH/migrations"
 
 mkdir -p "$DEPLOY_PATH"
 
@@ -70,27 +72,39 @@ echo "USE_INTERNAL_DEPS: $USE_INTERNAL_DEPS"
 
 export IMAGE_OWNER
 export IMAGE_TAG="$DEPLOY_TAG"
+export MIGRATIONS_DIR
 
-compose_cmd=(docker compose --project-directory "$PROJECT_DIRECTORY" --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+compose_cmd=(
+  docker compose
+  -p "$COMPOSE_PROJECT_NAME"
+  --project-directory "$PROJECT_DIRECTORY"
+  -f "$COMPOSE_FILE"
+  --env-file "$ENV_FILE"
+)
 
 echo "Compose diagnostics:"
 echo "  pwd: $(pwd)"
 echo "  DEPLOY_PATH: $DEPLOY_PATH"
-echo "  project-directory: $PROJECT_DIRECTORY"
-echo "  compose file: $COMPOSE_FILE"
-echo "  env file path: $ENV_FILE"
+echo "  compose_file: $COMPOSE_FILE"
+echo "  env_file: $ENV_FILE"
+echo "  MIGRATIONS_DIR: $MIGRATIONS_DIR"
+echo "  project_name: $COMPOSE_PROJECT_NAME"
 
-migration_file="$DEPLOY_PATH/migrations/001_init.sql"
+migration_file="$MIGRATIONS_DIR/001_init.sql"
 if [[ ! -f "$migration_file" ]]; then
   echo "missing migration file: $migration_file (workflow 未上传迁移文件)" >&2
   echo "Diagnostics: pwd" >&2
   pwd >&2
   echo "Diagnostics: ls -la $DEPLOY_PATH" >&2
   ls -la "$DEPLOY_PATH" >&2 || true
-  echo "Diagnostics: ls -la $DEPLOY_PATH/migrations" >&2
-  ls -la "$DEPLOY_PATH/migrations" >&2 || true
+  echo "Diagnostics: ls -la $MIGRATIONS_DIR" >&2
+  ls -la "$MIGRATIONS_DIR" >&2 || true
   exit 1
 fi
+
+echo "Preflight checks..."
+test -f "$migration_file"
+"${compose_cmd[@]}" config >/dev/null
 
 echo "Resolved compose migrate volume config:"
 "${compose_cmd[@]}" config | awk '
@@ -147,8 +161,8 @@ if ! run_migrate; then
   pwd >&2
   echo "Diagnostics: ls -la $DEPLOY_PATH" >&2
   ls -la "$DEPLOY_PATH" >&2 || true
-  echo "Diagnostics: ls -la $DEPLOY_PATH/migrations" >&2
-  ls -la "$DEPLOY_PATH/migrations" >&2 || true
+  echo "Diagnostics: ls -la $MIGRATIONS_DIR" >&2
+  ls -la "$MIGRATIONS_DIR" >&2 || true
   if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
     "${compose_cmd[@]}" logs pg --tail=200 >&2 || true
   fi
