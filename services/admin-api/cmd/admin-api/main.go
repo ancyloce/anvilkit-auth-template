@@ -5,13 +5,14 @@ import (
 	"log"
 	"path/filepath"
 
+	"github.com/casbin/casbin/v2"
+	"github.com/gin-gonic/gin"
+
 	"anvilkit-auth-template/modules/common-go/pkg/cfg"
 	"anvilkit-auth-template/modules/common-go/pkg/db/pgsql"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
 	"anvilkit-auth-template/services/admin-api/internal/handler"
 	"anvilkit-auth-template/services/admin-api/internal/store"
-	"github.com/casbin/casbin/v2"
-	"github.com/gin-gonic/gin"
 )
 
 func main() {
