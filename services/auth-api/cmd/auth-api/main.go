@@ -37,6 +37,7 @@ func main() {
 		AccessTTL:      authCfg.AccessTTL,
 		RefreshTTL:     authCfg.RefreshTTL,
 		PasswordMinLen: authCfg.PasswordMinLen,
+		BcryptCost:     authCfg.BcryptCost,
 	}
 
 	r := gin.New()

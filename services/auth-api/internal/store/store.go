@@ -10,7 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/crypto/bcrypt"
+
+	"anvilkit-auth-template/services/auth-api/internal/auth/crypto"
 )
 
 type Store struct{ DB *pgxpool.Pool }
@@ -26,16 +27,7 @@ type RegisteredUser struct {
 	Email string
 }
 
-func hashPassword(pwd string) (string, error) {
-	b, err := bcrypt.GenerateFromPassword([]byte(pwd), 12)
-	return string(b), err
-}
-
-func verifyPassword(hash, pwd string) bool {
-	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pwd)) == nil
-}
-
-func (s *Store) Register(ctx context.Context, email, password string) (*RegisteredUser, error) {
+func (s *Store) Register(ctx context.Context, email, password string, bcryptCost int) (*RegisteredUser, error) {
 	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
@@ -47,7 +39,7 @@ func (s *Store) Register(ctx context.Context, email, password string) (*Register
 	}()
 
 	id := uuid.NewString()
-	h, err := hashPassword(password)
+	h, err := crypto.HashPassword(password, bcryptCost)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +55,7 @@ func (s *Store) Register(ctx context.Context, email, password string) (*Register
 	return &RegisteredUser{ID: id, Email: email}, nil
 }
 
-func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName string) (*BootstrapResult, error) {
+func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName string, bcryptCost int) (*BootstrapResult, error) {
 	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
@@ -75,22 +67,31 @@ func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName strin
 	}()
 
 	uid := ""
-	pwdHash := ""
-	err = tx.QueryRow(ctx, `select id,password_hash from users where email=$1`, email).Scan(&uid, &pwdHash)
+	var pwdHash *string
+	err = tx.QueryRow(ctx, `
+select u.id, upc.password_hash
+from users u
+left join user_password_credentials upc on upc.user_id = u.id
+where u.email=$1`, email).Scan(&uid, &pwdHash)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
 		}
 		uid = uuid.NewString()
-		h, hErr := hashPassword(password)
+		h, hErr := crypto.HashPassword(password, bcryptCost)
 		if hErr != nil {
 			return nil, hErr
 		}
-		if _, err = tx.Exec(ctx, `insert into users(id,email,password_hash,created_at) values($1,$2,$3,now())`, uid, email, h); err != nil {
+		if _, err = tx.Exec(ctx, `insert into users(id,email,status,created_at,updated_at) values($1,$2,1,now(),now())`, uid, email); err != nil {
 			return nil, err
 		}
-	} else if !verifyPassword(pwdHash, password) {
-		return nil, errors.New("invalid_password")
+		if _, err = tx.Exec(ctx, `insert into user_password_credentials(user_id,password_hash,updated_at) values($1,$2,now())`, uid, h); err != nil {
+			return nil, err
+		}
+	} else {
+		if pwdHash == nil || crypto.VerifyPassword(*pwdHash, password) != nil {
+			return nil, errors.New("invalid_password")
+		}
 	}
 
 	tid := uuid.NewString()
@@ -112,13 +113,15 @@ func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName strin
 func (s *Store) Login(ctx context.Context, email, password, tenantID string) (string, error) {
 	var uid, hash string
 	err := s.DB.QueryRow(ctx, `
-select u.id,u.password_hash from users u
-join tenant_users tu on tu.user_id=u.id and tu.tenant_id=$2
+select u.id, upc.password_hash
+from users u
+join user_password_credentials upc on upc.user_id = u.id
+join tenant_users tu on tu.user_id = u.id and tu.tenant_id=$2
 where u.email=$1`, email, tenantID).Scan(&uid, &hash)
 	if err != nil {
 		return "", err
 	}
-	if !verifyPassword(hash, password) {
+	if crypto.VerifyPassword(hash, password) != nil {
 		return "", errors.New("invalid_password")
 	}
 	return uid, nil
