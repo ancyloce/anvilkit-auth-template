@@ -227,11 +227,20 @@ jobs:
           IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
           IMAGE_OWNER: ${{ needs.build.outputs.image_owner }}
           USE_INTERNAL_DEPS: ${{ vars.USE_INTERNAL_DEPS }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
+          set -euo pipefail
+          : "${GHCR_USERNAME:?missing required secret GHCR_USERNAME}"
+          : "${GHCR_TOKEN:?missing required secret GHCR_TOKEN}"
+
           port="${DEPLOY_PORT:-22}"
           deps="${USE_INTERNAL_DEPS:-true}"
+          ghcr_username_escaped=$(printf '%q' "$GHCR_USERNAME")
+          ghcr_token_escaped=$(printf '%q' "$GHCR_TOKEN")
           ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
             "chmod +x '$DEPLOY_PATH/scripts/remote_deploy.sh' && \
+             GHCR_USERNAME=$ghcr_username_escaped GHCR_TOKEN=$ghcr_token_escaped \
              '$DEPLOY_PATH/scripts/remote_deploy.sh' '$DEPLOY_PATH' '$IMAGE_TAG' '$IMAGE_OWNER' '$deps'"
 
       - name: Cleanup local deploy env artifact

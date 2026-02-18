@@ -10,6 +10,8 @@ DEPLOY_PATH="$1"
 DEPLOY_TAG="$2"
 IMAGE_OWNER="$3"
 USE_INTERNAL_DEPS="${4:-true}"
+GHCR_USERNAME="${GHCR_USERNAME:-}"
+GHCR_TOKEN="${GHCR_TOKEN:-}"
 
 COMPOSE_FILE="deploy/docker-compose.prod.yml"
 STATE_FILE=".deploy_state"
@@ -25,6 +27,11 @@ fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "missing $ENV_FILE in $DEPLOY_PATH; please create it with production secrets" >&2
+  exit 1
+fi
+
+if [[ -z "$GHCR_USERNAME" || -z "$GHCR_TOKEN" ]]; then
+  echo "missing GHCR credentials: GHCR_USERNAME and GHCR_TOKEN are required for pulling private images" >&2
   exit 1
 fi
 
@@ -50,6 +57,10 @@ compose_cmd=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
   compose_cmd+=(--profile with-deps)
 fi
+
+echo "Logging in to ghcr.io as ${GHCR_USERNAME}"
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
+trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
 "${compose_cmd[@]}" pull auth-api admin-api
 "${compose_cmd[@]}" run --rm migrate
