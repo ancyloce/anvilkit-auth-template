@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	ajwt "auth-platform-template/modules/common-go/pkg/auth/jwt"
-	"auth-platform-template/modules/common-go/pkg/httpx/apperr"
-	"auth-platform-template/modules/common-go/pkg/httpx/resp"
-	"auth-platform-template/modules/common-go/pkg/util"
-	"auth-platform-template/services/auth-api/internal/store"
+	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
+	"anvilkit-auth-template/modules/common-go/pkg/util"
+	"anvilkit-auth-template/services/auth-api/internal/store"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 )

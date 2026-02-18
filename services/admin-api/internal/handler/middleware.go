@@ -3,7 +3,7 @@ package handler
 import (
 	"errors"
 
-	"auth-platform-template/modules/common-go/pkg/httpx/apperr"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"github.com/gin-gonic/gin"
 )
 

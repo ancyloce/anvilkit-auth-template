@@ -1,8 +1,8 @@
 package ginmid
 
 import (
-	"auth-platform-template/modules/common-go/pkg/httpx/apperr"
-	"auth-platform-template/modules/common-go/pkg/httpx/resp"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
 	"github.com/gin-gonic/gin"
 )
 

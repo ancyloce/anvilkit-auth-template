@@ -1,0 +1,8 @@
+go 1.22
+
+use (
+	.
+	./modules/common-go
+	./services/auth-api
+	./services/admin-api
+)

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"strings"
 
-	ajwt "auth-platform-template/modules/common-go/pkg/auth/jwt"
-	"auth-platform-template/modules/common-go/pkg/httpx/apperr"
+	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
+	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"github.com/gin-gonic/gin"
 )
 

@@ -41,9 +41,7 @@ jobs:
 
       - name: Prepare Go workspace dependencies
         run: |
-          if [ -f go.work ]; then
-            go work sync
-          fi
+          go work sync
           for dir in modules/common-go services/auth-api services/admin-api; do
             (cd "$dir" && go mod download)
           done
@@ -65,7 +63,7 @@ jobs:
       - name: Migrate database
         run: psql "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable" -f services/auth-api/migrations/001_init.sql
 
-      - name: Run tests
+      - name: Run module tests
         env:
           DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
           REDIS_ADDR: localhost:6379
@@ -74,6 +72,13 @@ jobs:
           for dir in modules/common-go services/auth-api services/admin-api; do
             (cd "$dir" && go test ./... -count=1)
           done
+
+      - name: Run workspace root tests
+        env:
+          DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
+          REDIS_ADDR: localhost:6379
+          JWT_SECRET: test-secret
+        run: go test ./... -count=1
 
   lint:
     runs-on: ubuntu-latest
@@ -95,13 +100,11 @@ jobs:
 
       - name: Prepare Go workspace dependencies
         run: |
-          if [ -f go.work ]; then
-            go work sync
-          fi
+          go work sync
           (cd "${{ matrix.module-dir }}" && go mod download)
 
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.61.0
+          version: v1.57.2
           working-directory: ${{ matrix.module-dir }}
           args: --timeout=5m
