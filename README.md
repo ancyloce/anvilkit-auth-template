@@ -1,128 +1,98 @@
 # anvilkit-auth-template
 
-Open-source style starter template for a multi-tenant auth platform built from day one with two microservices:
+Production-ready starter template for a multi-tenant auth platform built with two independent microservices:
 
-- `auth-api` (user auth, token lifecycle)
-- `admin-api` (tenant-scoped admin RBAC APIs)
+- `auth-api` — user authentication and token lifecycle (port 8080)
+- `admin-api` — tenant-scoped RBAC admin APIs (port 8081)
 
-Tech stack: **Go 1.22**, **Gin**, **PostgreSQL**, **Redis**.
+**Stack:** Go 1.22, Gin, PostgreSQL 16, Redis 7
 
-## Quick start
+## Quick Start
 
 ```bash
 cp .env.example .env
-make init
-make smoke
+# Set JWT_ISSUER, JWT_AUDIENCE, JWT_SECRET in .env
+make init    # starts containers + runs migrations
+make smoke   # verify everything is working
 ```
-
-## Services
-
-- auth-api: `http://localhost:8080`
-- admin-api: `http://localhost:8081`
 
 ## Highlights
 
-- Unified JSON envelope response with request ID.
-- Middleware-driven centralized error handling.
-- JWT access + refresh rotation with hashed refresh token persistence.
-- Casbin RBAC for admin APIs.
-- Docker Compose one-command bootstrap.
+- JWT access tokens + refresh token rotation with hashed persistence
+- Casbin RBAC with domain-scoped roles for admin APIs
+- Unified JSON envelope response with stable error codes and request ID
+- Middleware-driven centralized error handling
+- Redis fixed-window rate limiting on auth endpoints
+- Docker Compose one-command bootstrap; production compose with auto-rollback CI/CD
 
 See `docs/` for architecture and API details.
 
-## Auth 配置
+## Configuration
 
-`auth-api` 启动时会从环境变量加载统一的认证配置（缺失关键项会直接报错并退出，不会打印敏感值）。
+`auth-api` loads config from environment variables on startup. Missing required variables cause an immediate exit (no sensitive values are logged).
 
-| 变量 | 是否必填 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `JWT_ISSUER` | 是 | - | JWT `iss`（发行者） |
-| `JWT_AUDIENCE` | 是 | - | JWT `aud`（受众） |
-| `JWT_SECRET` | 是 | - | JWT 签名密钥（不要提交真实值） |
-| `ACCESS_TTL_MIN` | 否 | `15` | Access Token 过期分钟数 |
-| `REFRESH_TTL_HOURS` | 否 | `168` | Refresh Token 过期小时数（默认 7 天） |
-| `PASSWORD_MIN_LEN` | 否 | `8` | 密码最小长度策略 |
-| `BCRYPT_COST` | 否 | `12` | bcrypt 计算成本（4-31） |
-| `LOGIN_FAIL_LIMIT` | 否 | `5` | 登录失败限流阈值 |
-| `LOGIN_FAIL_WINDOW_MIN` | 否 | `10` | 登录失败限流统计窗口（分钟） |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `JWT_ISSUER` | yes | — | JWT `iss` claim |
+| `JWT_AUDIENCE` | yes | — | JWT `aud` claim |
+| `JWT_SECRET` | yes | — | JWT signing key |
+| `DB_DSN` | no | `postgres://postgres:postgres@localhost:5432/auth?sslmode=disable` | PostgreSQL DSN |
+| `REDIS_ADDR` | no | `localhost:6379` | Redis address |
+| `ACCESS_TTL_MIN` | no | `15` | Access token TTL (minutes) |
+| `REFRESH_TTL_HOURS` | no | `168` | Refresh token TTL (hours, default 7 days) |
+| `PASSWORD_MIN_LEN` | no | `8` | Minimum password length |
+| `BCRYPT_COST` | no | `12` | bcrypt cost factor (4–31) |
+| `LOGIN_FAIL_LIMIT` | no | `5` | Failed login rate limit threshold |
+| `LOGIN_FAIL_WINDOW_MIN` | no | `10` | Failed login rate limit window (minutes) |
+| `CORS_ALLOW_ORIGINS` | no | `http://localhost:3000` | Allowed CORS origins |
+| `CORS_ALLOW_CREDENTIALS` | no | `false` | CORS credentials flag |
+| `RBAC_DIR` | no | `internal/rbac` | Casbin config directory (admin-api only) |
 
-示例（开发环境）：
+## Deployment (Docker Compose + GitHub Actions)
 
-```bash
-export JWT_ISSUER=anvilkit-auth
-export JWT_AUDIENCE=anvilkit-clients
-export JWT_SECRET=dev-secret-change-me
-export ACCESS_TTL_MIN=15
-export REFRESH_TTL_HOURS=168
-export PASSWORD_MIN_LEN=8
-export BCRYPT_COST=12
-export LOGIN_FAIL_LIMIT=5
-export LOGIN_FAIL_WINDOW_MIN=10
-```
+`.github/workflows/deploy.yml` builds and pushes images to GHCR, then deploys to a Linux server via SSH.
 
-## 部署指南（Docker Compose + GitHub Actions）
+### 1. Server setup
 
-本仓库新增了 `.github/workflows/deploy.yml`，用于将 `auth-api` 与 `admin-api` 镜像构建并推送到 GHCR，再通过 SSH 在目标 Linux 服务器上执行容器部署。
+1. Install Docker with the Compose plugin (`docker compose version` should work).
+2. Create a deploy directory, e.g. `/opt/anvilkit-auth-template`.
+3. Place a `.env` file there with at minimum: `DB_DSN`, `REDIS_ADDR`, `JWT_ISSUER`, `JWT_AUDIENCE`, `JWT_SECRET`, `CORS_ALLOW_ORIGINS`.
+4. If using external DB/Redis, point `DB_DSN`/`REDIS_ADDR` to those addresses and set `USE_INTERNAL_DEPS=false` in GitHub Environment Variables.
+5. If images are private, run `docker login ghcr.io` on the server first.
 
-### 1) 服务器准备
+Production deploys use `deploy/docker-compose.prod.yml`, which runs a one-shot `migrate` service before starting the API containers.
 
-1. 安装 Docker 与 Docker Compose Plugin（`docker compose version` 可用）。
-2. 创建部署目录（示例）：`/opt/anvilkit-auth-template`。
-3. 在部署目录准备生产环境变量文件：`/opt/anvilkit-auth-template/.env`，至少包含：
-   - `DB_DSN`
-   - `REDIS_ADDR`
-   - `JWT_SECRET`
-   - `CORS_ALLOW_ORIGINS`
-   - `CORS_ALLOW_CREDENTIALS`
-4. 如果 DB/Redis 走外部服务，`DB_DSN/REDIS_ADDR` 指向外部地址，并在 GitHub Environment Variables 中设置 `USE_INTERNAL_DEPS=false`。
-5. 确保服务器可拉取 GHCR 镜像（镜像私有时，请预先 `docker login ghcr.io`）。
+### 2. GitHub Secrets & Variables
 
-> 说明：生产部署使用 `deploy/docker-compose.prod.yml`，其中包含 `migrate` 一次性迁移服务；部署时会先执行迁移，再启动 API 容器。
+Create a `production` environment (optionally `staging`) in your GitHub repo and configure:
 
-### 2) GitHub Environments 与 Secrets 配置
+**Required secrets:**
+- `DEPLOY_SSH_KEY` — private key for the deploy user
+- `DEPLOY_HOST` — server address
+- `DEPLOY_USER` — SSH user
+- `DEPLOY_PATH` — remote deploy directory
+- `JWT_ISSUER`, `JWT_AUDIENCE`, `JWT_SECRET`
 
-建议在 GitHub 仓库中创建 Environment（至少 `production`，可选 `staging`），并在每个 Environment 下配置：
+**Optional variables:**
+- `DEPLOY_PORT` — SSH port (default: 22)
+- `USE_INTERNAL_DEPS` — `true` (default, use compose-managed pg/redis) or `false` (external)
 
-必需 Secrets：
-- `DEPLOY_SSH_KEY`：部署机私钥（建议专用 deploy key）
-- `DEPLOY_HOST`：服务器地址
-- `DEPLOY_USER`：SSH 用户
-- `DEPLOY_PATH`：远程部署目录（如 `/opt/anvilkit-auth-template`）
-- `DEPLOY_PORT`：可选，默认 22
+### 3. Triggering a deploy
 
-可选 Variables：
-- `USE_INTERNAL_DEPS`：`true`（默认，启动 compose 内 pg/redis）或 `false`（使用外部 DB/Redis）
+- **Manual:** `workflow_dispatch` with environment selection (`production` / `staging`)
+- **Automatic:** push a `v*` tag → deploys to `production`
 
-### 3) 触发部署
+Deploy steps:
+1. Build and push images to GHCR: `ghcr.io/<owner>/anvilkit-auth-template-{auth,admin}-api:<tag>`
+2. Upload `docker-compose.prod.yml`, `remote_deploy.sh`, and migration SQL to the server
+3. Run `docker compose run --rm migrate` then `docker compose up -d`
+4. Health check both services; auto-rollback to previous tag on failure
 
-支持两种触发方式：
-- `workflow_dispatch` 手动触发（默认，支持选择 `production/staging`）
-- 推送版本 tag（`v*`）触发自动部署（默认走 `production` environment）
+### 4. Rollback
 
-部署流程：
-1. 在 CI 构建并推送镜像：
-   - `ghcr.io/<owner>/anvilkit-auth-template-auth-api:<tag>`
-   - `ghcr.io/<owner>/anvilkit-auth-template-admin-api:<tag>`
-2. 上传 `docker-compose.prod.yml`、`remote_deploy.sh`、迁移 SQL 到服务器。
-3. 远程执行：
-   - `docker compose run --rm migrate`
-   - `docker compose pull && docker compose up -d`
-4. 健康检查：
-   - `curl -fsS http://127.0.0.1:8080/healthz`
-   - `curl -fsS http://127.0.0.1:8081/healthz`
-5. 健康检查失败自动回滚到上一版本 tag。
+`remote_deploy.sh` maintains `current_tag` and `prev_tag` in `${DEPLOY_PATH}/.deploy_state`. On health check failure it automatically re-deploys the previous tag.
 
-### 4) 回滚机制
-
-远程脚本会在 `${DEPLOY_PATH}/.deploy_state` 维护：
-- `current_tag`
-- `prev_tag`
-
-当部署失败或健康检查失败时，脚本自动尝试回滚到 `prev_tag/current_tag` 并重新拉起服务。
-
-### 5) 可观测性与排障
-
-常用命令（在服务器部署目录执行）：
+### 5. Observability
 
 ```bash
 docker compose -f deploy/docker-compose.prod.yml --env-file .env ps
@@ -132,7 +102,7 @@ curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS http://127.0.0.1:8081/healthz
 ```
 
-常见问题：
-- **拉取镜像失败（401/403）**：检查服务器是否已登录 GHCR 或镜像是否公开。
-- **迁移失败**：检查 `.env` 中 `DB_DSN` 连通性与权限；确认目标库可执行 SQL。
-- **健康检查失败**：查看 `auth-api/admin-api` 日志，确认依赖（DB/Redis、JWT_SECRET、CORS）配置完整。
+**Common issues:**
+- Image pull 401/403 — log in to GHCR on the server or make images public
+- Migration failure — check `DB_DSN` connectivity and permissions in `.env`
+- Health check failure — check service logs; confirm DB, Redis, and all required JWT env vars are set
