@@ -1,0 +1,213 @@
+name: planning bootstrap
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+    paths:
+      - docs/issues/m1-m3.md
+      - .github/workflows/bootstrap-planning.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  bootstrap-milestones-and-issues:
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create milestones and issues from docs/issues/m1-m3.md
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const plannerPath = 'docs/issues/m1-m3.md';
+
+            if (!fs.existsSync(plannerPath)) {
+              core.warning(`${plannerPath} not found, skip bootstrap.`);
+              return;
+            }
+
+            const markdown = fs.readFileSync(plannerPath, 'utf8');
+
+            const milestoneSpecs = {
+              M1: {
+                title: 'M1 - AuthN Core',
+                description: '完成注册、登录、刷新、登出、JWT 中间件、测试与 CI gating，形成可上线的认证最小闭环。',
+              },
+              M2: {
+                title: 'M2 - Multi-tenant MVP',
+                description: '引入租户数据模型、Bootstrap、租户切换与成员管理基础能力。',
+              },
+              M3: {
+                title: 'M3 - RBAC with Casbin',
+                description: '完成基于租户域（tid）的 Casbin 鉴权，覆盖默认策略、角色映射、中间件与测试。',
+              },
+            };
+
+            async function ensureMilestone(title, description) {
+              const list = await github.paginate(github.rest.issues.listMilestones, {
+                owner,
+                repo,
+                state: 'all',
+                per_page: 100,
+              });
+
+              const found = list.find((m) => m.title === title);
+              if (found) {
+                core.info(`Milestone exists: ${title} (#${found.number})`);
+                return found;
+              }
+
+              const created = await github.rest.issues.createMilestone({
+                owner,
+                repo,
+                title,
+                description,
+                state: 'open',
+              });
+              core.info(`Milestone created: ${title} (#${created.data.number})`);
+              return created.data;
+            }
+
+            const milestoneByKey = {};
+            for (const [key, spec] of Object.entries(milestoneSpecs)) {
+              milestoneByKey[key] = await ensureMilestone(spec.title, spec.description);
+            }
+
+            function parseIssueBlocks(md) {
+              const lines = md.split(/\r?\n/);
+              const blocks = [];
+
+              for (let i = 0; i < lines.length; i += 1) {
+                const issueMatch = lines[i].match(/^### Issue: (.+)$/);
+                if (!issueMatch) continue;
+
+                const title = issueMatch[1].trim();
+                let labels = [];
+                let bodyStart = i + 1;
+
+                if (lines[i + 1] && lines[i + 1].startsWith('**Labels**:')) {
+                  const raw = lines[i + 1].replace('**Labels**:', '').trim();
+                  labels = raw
+                    .replace(/`/g, '')
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+                  bodyStart = i + 2;
+                }
+
+                let bodyEnd = lines.length;
+                for (let j = bodyStart; j < lines.length; j += 1) {
+                  if (lines[j].startsWith('### Issue: ')) {
+                    bodyEnd = j;
+                    break;
+                  }
+                }
+
+                const body = lines.slice(bodyStart, bodyEnd).join('\n').trim();
+                blocks.push({ title, labels, body });
+                i = bodyEnd - 1;
+              }
+
+              return blocks;
+            }
+
+            const issues = parseIssueBlocks(markdown);
+            if (issues.length === 0) {
+              core.warning('No issue definitions found in docs/issues/m1-m3.md');
+              return;
+            }
+
+            const existingIssues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'all',
+              per_page: 100,
+            });
+
+            const existingByTitle = new Map();
+            for (const issue of existingIssues) {
+              if (!issue.pull_request) {
+                existingByTitle.set(issue.title, issue);
+              }
+            }
+
+            const created = [];
+            const skipped = [];
+
+            for (const issue of issues) {
+              const matched = issue.title.match(/^(M[1-3])-\d+/);
+              if (!matched) {
+                core.warning(`Skip issue without milestone prefix: ${issue.title}`);
+                continue;
+              }
+              const milestoneKey = matched[1];
+              const milestone = milestoneByKey[milestoneKey];
+
+              if (existingByTitle.has(issue.title)) {
+                const existing = existingByTitle.get(issue.title);
+                skipped.push(`- ${issue.title} (#${existing.number})`);
+                continue;
+              }
+
+              const body = `${issue.body}\n\n---\n_This issue was bootstrapped by workflow \\`${context.workflow}\\` from \\`${plannerPath}\\`._`;
+              const result = await github.rest.issues.create({
+                owner,
+                repo,
+                title: issue.title,
+                body,
+                labels: issue.labels,
+                milestone: milestone.number,
+              });
+
+              existingByTitle.set(issue.title, result.data);
+              created.push(`- ${issue.title} (#${result.data.number})`);
+            }
+
+            const marker = '<!-- planning-bootstrap:m1-m3 -->';
+            const summary = [
+              marker,
+              '### Planning bootstrap result',
+              '',
+              `Source: \\`${plannerPath}\\``,
+              '',
+              '**Created**',
+              ...(created.length ? created : ['- none']),
+              '',
+              '**Skipped (already exists)**',
+              ...(skipped.length ? skipped : ['- none']),
+            ].join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+
+            const ownComment = comments.find(
+              (c) => c.user?.type === 'Bot' && c.body?.includes(marker),
+            );
+
+            if (ownComment) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: ownComment.id,
+                body: summary,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: context.issue.number,
+                body: summary,
+              });
+            }
