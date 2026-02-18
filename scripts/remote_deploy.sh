@@ -115,10 +115,8 @@ fi
 current_tag=""
 prev_tag=""
 if [[ -f "$STATE_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$STATE_FILE"
-  current_tag="${current_tag:-}"
-  prev_tag="${prev_tag:-}"
+  current_tag=$(grep '^current_tag=' "$STATE_FILE" | cut -d= -f2-)
+  prev_tag=$(grep '^prev_tag=' "$STATE_FILE" | cut -d= -f2-)
 fi
 
 rollback_tag="${current_tag:-$prev_tag}"
