@@ -5,4 +5,5 @@ use (
 	./modules/common-go
 	./services/auth-api
 	./services/admin-api
+	./tools/healthcheck
 )
