@@ -91,7 +91,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           cp .env.example .env
-          docker compose --env-file .env.example -f deploy/docker-compose.prod.yml config > /dev/null
+          docker compose --project-directory . --env-file .env -f deploy/docker-compose.prod.yml config > /dev/null
           rm -f .env
 
       - name: Build and push auth-api image
