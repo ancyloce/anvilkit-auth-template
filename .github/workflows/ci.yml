@@ -85,10 +85,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module-dir:
-          - modules/common-go
-          - services/auth-api
-          - services/admin-api
+        include:
+          - module-dir: modules/common-go
+            lint-path: ./modules/common-go/...
+          - module-dir: services/auth-api
+            lint-path: ./services/auth-api/...
+          - module-dir: services/admin-api
+            lint-path: ./services/admin-api/...
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,5 +109,4 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: v1.57.2
-          working-directory: ${{ matrix.module-dir }}
-          args: --timeout=5m
+          args: --timeout=5m ${{ matrix.lint-path }}
