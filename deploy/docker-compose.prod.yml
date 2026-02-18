@@ -1,3 +1,5 @@
+name: anvilkit-auth
+
 services:
   pg:
     image: postgres:16
@@ -37,7 +39,7 @@ services:
       pg:
         condition: service_healthy
     volumes:
-      - ../migrations:/migrations:ro
+      - ${MIGRATIONS_DIR}:/migrations:ro
     entrypoint:
       - /bin/sh
       - -ec
