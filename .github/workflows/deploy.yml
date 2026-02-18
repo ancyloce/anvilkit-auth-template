@@ -17,6 +17,8 @@ on:
         default: false
         type: boolean
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
@@ -41,6 +43,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Diagnostic trigger context
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          INPUTS_JSON: ${{ toJson(github.event.inputs) }}
+        run: |
+          echo "event_name=${EVENT_NAME}"
+          echo "ref=${REF}"
+          echo "ref_name=${REF_NAME}"
+          echo "ref_type=${REF_TYPE}"
+          echo "sha=${SHA}"
+          echo "actor=${ACTOR}"
+          echo "inputs=${INPUTS_JSON}"
 
       - name: Prepare image owner
         id: prep
@@ -112,6 +132,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate required deploy secrets
+        env:
+          DB_DSN: ${{ secrets.DB_DSN }}
+          REDIS_ADDR: ${{ secrets.REDIS_ADDR }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in DB_DSN REDIS_ADDR JWT_SECRET CORS_ALLOW_ORIGINS DEPLOY_SSH_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_PATH; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if ((${#missing[@]} > 0)); then
+            echo "::error::Missing required secrets for deploy environment: ${missing[*]}"
+            echo "Please configure these secrets in GitHub Environment '${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'production' }}'."
+            echo "Required app secrets: DB_DSN, REDIS_ADDR, JWT_SECRET, CORS_ALLOW_ORIGINS"
+            echo "Required deploy secrets: DEPLOY_SSH_KEY, DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH (DEPLOY_PORT optional; defaults to 22)"
+            exit 1
+          fi
+
       - name: Configure SSH key
         run: |
           install -m 700 -d ~/.ssh
@@ -129,24 +177,20 @@ jobs:
           CORS_ALLOW_CREDENTIALS: ${{ secrets.CORS_ALLOW_CREDENTIALS }}
         run: |
           set -euo pipefail
-          : "${DB_DSN:?missing required secret DB_DSN}"
-          : "${REDIS_ADDR:?missing required secret REDIS_ADDR}"
-          : "${JWT_SECRET:?missing required secret JWT_SECRET}"
-          : "${CORS_ALLOW_ORIGINS:?missing required secret CORS_ALLOW_ORIGINS}"
 
           access_ttl="${ACCESS_TTL_MIN:-15}"
           refresh_ttl="${REFRESH_TTL_HOURS:-168}"
           cors_credentials="${CORS_ALLOW_CREDENTIALS:-false}"
 
-          cat > .deploy.env <<EOF_ENV
-DB_DSN=${DB_DSN}
-REDIS_ADDR=${REDIS_ADDR}
-JWT_SECRET=${JWT_SECRET}
-CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
-ACCESS_TTL_MIN=${access_ttl}
-REFRESH_TTL_HOURS=${refresh_ttl}
-CORS_ALLOW_CREDENTIALS=${cors_credentials}
-EOF_ENV
+          {
+            echo "DB_DSN=${DB_DSN}"
+            echo "REDIS_ADDR=${REDIS_ADDR}"
+            echo "JWT_SECRET=${JWT_SECRET}"
+            echo "CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}"
+            echo "ACCESS_TTL_MIN=${access_ttl}"
+            echo "REFRESH_TTL_HOURS=${refresh_ttl}"
+            echo "CORS_ALLOW_CREDENTIALS=${cors_credentials}"
+          } > .deploy.env
           chmod 600 .deploy.env
 
       - name: Ensure remote .env exists (or overwrite)
