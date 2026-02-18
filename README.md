@@ -30,6 +30,36 @@ make smoke
 
 See `docs/` for architecture and API details.
 
+## Auth 配置
+
+`auth-api` 启动时会从环境变量加载统一的认证配置（缺失关键项会直接报错并退出，不会打印敏感值）。
+
+| 变量 | 是否必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `JWT_ISSUER` | 是 | - | JWT `iss`（发行者） |
+| `JWT_AUDIENCE` | 是 | - | JWT `aud`（受众） |
+| `JWT_SECRET` | 是 | - | JWT 签名密钥（不要提交真实值） |
+| `ACCESS_TTL_MIN` | 否 | `15` | Access Token 过期分钟数 |
+| `REFRESH_TTL_HOURS` | 否 | `168` | Refresh Token 过期小时数（默认 7 天） |
+| `PASSWORD_MIN_LEN` | 否 | `8` | 密码最小长度策略 |
+| `BCRYPT_COST` | 否 | `12` | bcrypt 计算成本（4-31） |
+| `LOGIN_FAIL_LIMIT` | 否 | `5` | 登录失败限流阈值 |
+| `LOGIN_FAIL_WINDOW_MIN` | 否 | `10` | 登录失败限流统计窗口（分钟） |
+
+示例（开发环境）：
+
+```bash
+export JWT_ISSUER=anvilkit-auth
+export JWT_AUDIENCE=anvilkit-clients
+export JWT_SECRET=dev-secret-change-me
+export ACCESS_TTL_MIN=15
+export REFRESH_TTL_HOURS=168
+export PASSWORD_MIN_LEN=8
+export BCRYPT_COST=12
+export LOGIN_FAIL_LIMIT=5
+export LOGIN_FAIL_WINDOW_MIN=10
+```
+
 ## 部署指南（Docker Compose + GitHub Actions）
 
 本仓库新增了 `.github/workflows/deploy.yml`，用于将 `auth-api` 与 `admin-api` 镜像构建并推送到 GHCR，再通过 SSH 在目标 Linux 服务器上执行容器部署。

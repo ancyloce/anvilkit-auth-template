@@ -11,6 +11,7 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/cfg"
 	"anvilkit-auth-template/modules/common-go/pkg/db/pgsql"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
+	"anvilkit-auth-template/services/auth-api/internal/config"
 	"anvilkit-auth-template/services/auth-api/internal/handler"
 	"anvilkit-auth-template/services/auth-api/internal/store"
 )
@@ -25,12 +26,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	authCfg, err := config.LoadAuthConfigFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	h := &handler.Handler{
 		Store:      &store.Store{DB: db},
-		JWTSecret:  cfg.GetString("JWT_SECRET", "dev-secret-change-me"),
-		AccessTTL:  time.Duration(cfg.GetInt("ACCESS_TTL_MIN", 15)) * time.Minute,
-		RefreshTTL: time.Duration(cfg.GetInt("REFRESH_TTL_HOURS", 168)) * time.Hour,
+		JWTSecret:  authCfg.JWTSecret,
+		AccessTTL:  authCfg.AccessTTL,
+		RefreshTTL: authCfg.RefreshTTL,
 	}
 
 	r := gin.New()
