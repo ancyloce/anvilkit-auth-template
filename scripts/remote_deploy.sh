@@ -46,9 +46,9 @@ if [[ "$db_dsn" == *"@127.0.0.1:"* || "$db_dsn" == *"@localhost:"* ]]; then
   is_local_db="true"
 fi
 
-if [[ "$USE_INTERNAL_DEPS" != "true" && "$is_local_db" == "true" ]]; then
-  echo "USE_INTERNAL_DEPS=false but DB_DSN points to localhost/127.0.0.1; this cannot work from migrate container." >&2
-  echo "Set DB_DSN host to an external endpoint or set USE_INTERNAL_DEPS=true." >&2
+if [[ "$is_local_db" == "true" ]]; then
+  echo "DB_DSN in $ENV_FILE points to localhost/127.0.0.1, which is invalid for container-to-container DB access." >&2
+  echo "Use postgres://...@pg:5432/... for internal DB, or an external DB host/IP for external DB." >&2
   exit 1
 fi
 

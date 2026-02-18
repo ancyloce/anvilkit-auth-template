@@ -148,13 +148,27 @@ jobs:
           ACCESS_TTL_MIN: ${{ secrets.ACCESS_TTL_MIN }}
           REFRESH_TTL_HOURS: ${{ secrets.REFRESH_TTL_HOURS }}
           CORS_ALLOW_CREDENTIALS: ${{ secrets.CORS_ALLOW_CREDENTIALS }}
+          USE_INTERNAL_DEPS: ${{ vars.USE_INTERNAL_DEPS }}
         run: |
           set -euo pipefail
           : "${JWT_SECRET:?missing required secret JWT_SECRET}"
           : "${CORS_ALLOW_ORIGINS:?missing required secret CORS_ALLOW_ORIGINS}"
 
+          deps="${USE_INTERNAL_DEPS:-true}"
           db_dsn="${DB_DSN:-postgres://postgres:postgres@pg:5432/auth?sslmode=disable}"
           redis_addr="${REDIS_ADDR:-redis:6379}"
+
+          if [[ "$db_dsn" == *"@127.0.0.1:"* || "$db_dsn" == *"@localhost:"* ]]; then
+            if [[ "$deps" == "true" ]]; then
+              db_dsn="postgres://postgres:postgres@pg:5432/auth?sslmode=disable"
+              echo "DB_DSN points to localhost/127.0.0.1; overriding to internal compose service host pg:5432."
+            else
+              echo "DB_DSN points to localhost/127.0.0.1, which is invalid for containerized deploy with USE_INTERNAL_DEPS=false." >&2
+              echo "Set DB_DSN to a reachable external DB host/IP (not localhost)." >&2
+              exit 1
+            fi
+          fi
+
           access_ttl="${ACCESS_TTL_MIN:-15}"
           refresh_ttl="${REFRESH_TTL_HOURS:-168}"
           cors_credentials="${CORS_ALLOW_CREDENTIALS:-false}"
