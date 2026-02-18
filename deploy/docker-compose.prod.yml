@@ -45,9 +45,10 @@ services:
       - -ec
       - |
         echo "Running DB migration..."
-        for file in $(find /migrations -maxdepth 1 -type f -name '*.sql' | sort); do
-          echo "Applying migration: ${file}"
-          psql "$DB_DSN" -v ON_ERROR_STOP=1 -f "${file}"
+        ls -la /migrations
+        for f in $(ls -1 /migrations/*.sql | sort); do
+          echo "Applying migration: $$f"
+          psql "$$DB_DSN" -v ON_ERROR_STOP=1 -f "$$f"
         done
         echo "DB migration completed."
 

@@ -70,11 +70,12 @@ echo "Current tag: ${current_tag:-<none>}"
 echo "Previous tag: ${prev_tag:-<none>}"
 echo "USE_INTERNAL_DEPS: $USE_INTERNAL_DEPS"
 
-export IMAGE_OWNER
-export IMAGE_TAG="$DEPLOY_TAG"
-export MIGRATIONS_DIR
-
 compose_cmd=(
+  env
+  DEPLOY_PATH="$DEPLOY_PATH"
+  MIGRATIONS_DIR="$MIGRATIONS_DIR"
+  IMAGE_OWNER="$IMAGE_OWNER"
+  IMAGE_TAG="$DEPLOY_TAG"
   docker compose
   -p "$COMPOSE_PROJECT_NAME"
   --project-directory "$PROJECT_DIRECTORY"
@@ -89,6 +90,8 @@ echo "  compose_file: $COMPOSE_FILE"
 echo "  env_file: $ENV_FILE"
 echo "  MIGRATIONS_DIR: $MIGRATIONS_DIR"
 echo "  project_name: $COMPOSE_PROJECT_NAME"
+echo "MIGRATIONS_DIR=$MIGRATIONS_DIR"
+ls -la "$MIGRATIONS_DIR"
 
 migration_file="$MIGRATIONS_DIR/002_authn_core.sql"
 if [[ ! -f "$migration_file" ]]; then
@@ -200,7 +203,18 @@ if [[ -z "$rollback_tag" ]]; then
   exit 1
 fi
 
-export IMAGE_TAG="$rollback_tag"
+compose_cmd=(
+  env
+  DEPLOY_PATH="$DEPLOY_PATH"
+  MIGRATIONS_DIR="$MIGRATIONS_DIR"
+  IMAGE_OWNER="$IMAGE_OWNER"
+  IMAGE_TAG="$rollback_tag"
+  docker compose
+  -p "$COMPOSE_PROJECT_NAME"
+  --project-directory "$PROJECT_DIRECTORY"
+  -f "$COMPOSE_FILE"
+  --env-file "$ENV_FILE"
+)
 "${compose_cmd[@]}" pull auth-api admin-api
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
   "${compose_cmd[@]}" up -d auth-api admin-api
