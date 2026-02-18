@@ -3,6 +3,7 @@ name: anvilkit-auth
 services:
   pg:
     image: postgres:16
+    container_name: anvilkit-postgres
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -21,6 +22,7 @@ services:
 
   redis:
     image: redis:7
+    container_name: anvilkit-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
@@ -36,6 +38,7 @@ services:
 
   migrate:
     image: postgres:16
+    container_name: anvilkit-postgres-migrate
     restart: "no"
     env_file:
       - .env
@@ -61,6 +64,7 @@ services:
 
   auth-api:
     image: ghcr.io/${IMAGE_OWNER}/anvilkit-auth-template-auth-api:${IMAGE_TAG}
+    container_name: anvilkit-auth-api
     restart: unless-stopped
     env_file:
       - .env
@@ -83,6 +87,7 @@ services:
 
   admin-api:
     image: ghcr.io/${IMAGE_OWNER}/anvilkit-auth-template-admin-api:${IMAGE_TAG}
+    container_name: anvilkit-admin-api
     restart: unless-stopped
     env_file:
       - .env

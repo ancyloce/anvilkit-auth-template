@@ -1,6 +1,7 @@
 services:
   pg:
     image: postgres:16
+    container_name: anvilkit-postgres
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_USER: postgres
@@ -15,6 +16,7 @@ services:
 
   redis:
     image: redis:7
+    container_name: anvilkit-redis
     ports:
       - "6379:6379"
 
@@ -22,6 +24,7 @@ services:
     build:
       context: ..
       dockerfile: services/auth-api/Dockerfile
+    container_name: anvilkit-auth-api
     environment:
       DB_DSN: postgres://postgres:postgres@pg:5432/auth?sslmode=disable
       REDIS_ADDR: redis:6379
@@ -42,6 +45,7 @@ services:
     build:
       context: ..
       dockerfile: services/admin-api/Dockerfile
+    container_name: anvilkit-admin-api
     environment:
       DB_DSN: postgres://postgres:postgres@pg:5432/auth?sslmode=disable
       REDIS_ADDR: redis:6379
