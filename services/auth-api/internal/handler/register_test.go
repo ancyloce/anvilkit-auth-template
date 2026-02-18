@@ -29,7 +29,7 @@ func TestRegisterSuccess(t *testing.T) {
 		"password": "Passw0rd!",
 	})
 	if res.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d", res.Code, http.StatusCreated)
+		t.Fatalf("status = %d, want %d; body = %s", res.Code, http.StatusCreated, res.Body.String())
 	}
 
 	var body struct {
@@ -79,7 +79,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 		"password": "Passw0rd!",
 	})
 	if res.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want %d", res.Code, http.StatusConflict)
+		t.Fatalf("status = %d, want %d; body = %s", res.Code, http.StatusConflict, res.Body.String())
 	}
 	var body struct {
 		Code    int    `json:"code"`
