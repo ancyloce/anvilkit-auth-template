@@ -64,7 +64,9 @@ jobs:
         env:
           IMAGE_OWNER: ${{ steps.prep.outputs.owner_lc }}
           IMAGE_TAG: ${{ github.sha }}
-        run: docker compose --env-file .env.example -f deploy/docker-compose.prod.yml config > /dev/null
+        run: |
+          cp .env.example deploy/.env
+          docker compose --env-file .env.example -f deploy/docker-compose.prod.yml config > /dev/null
 
       - name: Build and push auth-api image
         uses: docker/build-push-action@v6
