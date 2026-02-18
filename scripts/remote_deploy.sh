@@ -20,6 +20,10 @@ ENV_FILE="$DEPLOY_PATH/.env"
 PROJECT_DIRECTORY="$DEPLOY_PATH"
 MIGRATIONS_DIR="$DEPLOY_PATH/migrations"
 
+export DEPLOY_PATH
+export MIGRATIONS_DIR
+export IMAGE_OWNER
+
 mkdir -p "$DEPLOY_PATH"
 
 if [[ ! -f "$COMPOSE_FILE" ]]; then
@@ -75,12 +79,10 @@ echo "Current tag: ${current_tag:-<none>}"
 echo "Previous tag: ${prev_tag:-<none>}"
 echo "USE_INTERNAL_DEPS: $USE_INTERNAL_DEPS"
 
+IMAGE_TAG="$DEPLOY_TAG"
+export IMAGE_TAG
+
 compose_cmd=(
-  env
-  DEPLOY_PATH="$DEPLOY_PATH"
-  MIGRATIONS_DIR="$MIGRATIONS_DIR"
-  IMAGE_OWNER="$IMAGE_OWNER"
-  IMAGE_TAG="$DEPLOY_TAG"
   docker compose
   -p "$COMPOSE_PROJECT_NAME"
   --project-directory "$PROJECT_DIRECTORY"
@@ -208,12 +210,10 @@ if [[ -z "$rollback_tag" ]]; then
   exit 1
 fi
 
+IMAGE_TAG="$rollback_tag"
+export IMAGE_TAG
+
 compose_cmd=(
-  env
-  DEPLOY_PATH="$DEPLOY_PATH"
-  MIGRATIONS_DIR="$MIGRATIONS_DIR"
-  IMAGE_OWNER="$IMAGE_OWNER"
-  IMAGE_TAG="$rollback_tag"
   docker compose
   -p "$COMPOSE_PROJECT_NAME"
   --project-directory "$PROJECT_DIRECTORY"
