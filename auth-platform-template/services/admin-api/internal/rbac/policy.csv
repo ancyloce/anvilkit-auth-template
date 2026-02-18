@@ -1,0 +1,2 @@
+p, tenant_admin, tenant:*, /api/v1/admin/*, (GET|POST|PUT|PATCH|DELETE)
+p, org_admin, tenant:*, /api/v1/admin/org/*, (GET|POST|PUT|PATCH|DELETE)

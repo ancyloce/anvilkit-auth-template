@@ -1,0 +1,138 @@
+package store
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
+)
+
+type Store struct{ DB *pgxpool.Pool }
+
+type BootstrapResult struct {
+	UserID   string
+	TenantID string
+	Email    string
+}
+
+func hashPassword(pwd string) (string, error) {
+	b, err := bcrypt.GenerateFromPassword([]byte(pwd), 12)
+	return string(b), err
+}
+
+func verifyPassword(hash, pwd string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pwd)) == nil
+}
+
+func (s *Store) Register(ctx context.Context, email, password string) (string, error) {
+	id := uuid.NewString()
+	h, err := hashPassword(password)
+	if err != nil {
+		return "", err
+	}
+	_, err = s.DB.Exec(ctx, `insert into users(id,email,password_hash,created_at) values($1,$2,$3,now())`, id, email, h)
+	return id, err
+}
+
+func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName string) (*BootstrapResult, error) {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	uid := ""
+	pwdHash := ""
+	err = tx.QueryRow(ctx, `select id,password_hash from users where email=$1`, email).Scan(&uid, &pwdHash)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		uid = uuid.NewString()
+		h, hErr := hashPassword(password)
+		if hErr != nil {
+			return nil, hErr
+		}
+		if _, err = tx.Exec(ctx, `insert into users(id,email,password_hash,created_at) values($1,$2,$3,now())`, uid, email, h); err != nil {
+			return nil, err
+		}
+	} else if !verifyPassword(pwdHash, password) {
+		return nil, errors.New("invalid_password")
+	}
+
+	tid := uuid.NewString()
+	if _, err = tx.Exec(ctx, `insert into tenants(id,name,created_at) values($1,$2,now())`, tid, tenantName); err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `insert into tenant_users(tenant_id,user_id,created_at) values($1,$2,now())`, tid, uid); err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `insert into user_roles(tenant_id,user_id,role,created_at) values($1,$2,'tenant_admin',now())`, tid, uid); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &BootstrapResult{UserID: uid, TenantID: tid, Email: email}, nil
+}
+
+func (s *Store) Login(ctx context.Context, email, password, tenantID string) (string, error) {
+	var uid, hash string
+	err := s.DB.QueryRow(ctx, `
+select u.id,u.password_hash from users u
+join tenant_users tu on tu.user_id=u.id and tu.tenant_id=$2
+where u.email=$1`, email, tenantID).Scan(&uid, &hash)
+	if err != nil {
+		return "", err
+	}
+	if !verifyPassword(hash, password) {
+		return "", errors.New("invalid_password")
+	}
+	return uid, nil
+}
+
+func (s *Store) SaveRefreshToken(ctx context.Context, token, userID, tenantID string, exp time.Time) error {
+	h := sha256.Sum256([]byte(token))
+	_, err := s.DB.Exec(ctx, `insert into refresh_tokens(token_hash,user_id,tenant_id,expires_at,created_at) values($1,$2,$3,$4,now())`, hex.EncodeToString(h[:]), userID, tenantID, exp)
+	return err
+}
+
+func (s *Store) RotateRefreshToken(ctx context.Context, oldToken, newToken string, exp time.Time) (string, string, error) {
+	oldH := sha256.Sum256([]byte(oldToken))
+	newH := sha256.Sum256([]byte(newToken))
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback(ctx)
+
+	var uid, tid string
+	err = tx.QueryRow(ctx, `
+select user_id,tenant_id from refresh_tokens
+where token_hash=$1 and revoked_at is null and expires_at > now()`, hex.EncodeToString(oldH[:])).Scan(&uid, &tid)
+	if err != nil {
+		return "", "", err
+	}
+	if _, err = tx.Exec(ctx, `update refresh_tokens set revoked_at=now() where token_hash=$1`, hex.EncodeToString(oldH[:])); err != nil {
+		return "", "", err
+	}
+	if _, err = tx.Exec(ctx, `insert into refresh_tokens(token_hash,user_id,tenant_id,expires_at,created_at) values($1,$2,$3,$4,now())`, hex.EncodeToString(newH[:]), uid, tid, exp); err != nil {
+		return "", "", err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", "", err
+	}
+	return uid, tid, nil
+}
+
+func (s *Store) RevokeRefreshToken(ctx context.Context, token string) error {
+	h := sha256.Sum256([]byte(token))
+	_, err := s.DB.Exec(ctx, `update refresh_tokens set revoked_at=now() where token_hash=$1 and revoked_at is null`, hex.EncodeToString(h[:]))
+	return err
+}

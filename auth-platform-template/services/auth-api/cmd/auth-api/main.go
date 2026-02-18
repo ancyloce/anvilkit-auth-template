@@ -1,0 +1,55 @@
+package main
+
+import (
+	"context"
+	"log"
+	"time"
+
+	"auth-platform-template/modules/common-go/pkg/cache/redis"
+	"auth-platform-template/modules/common-go/pkg/cfg"
+	"auth-platform-template/modules/common-go/pkg/db/pgsql"
+	"auth-platform-template/modules/common-go/pkg/httpx/ginmid"
+	"auth-platform-template/services/auth-api/internal/handler"
+	"auth-platform-template/services/auth-api/internal/store"
+	"github.com/gin-gonic/gin"
+)
+
+func main() {
+	ctx := context.Background()
+	db, err := pgsql.New(ctx, cfg.GetString("DB_DSN", "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	rdb, err := redis.New(ctx, cfg.GetString("REDIS_ADDR", "localhost:6379"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	h := &handler.Handler{
+		Store:      &store.Store{DB: db},
+		JWTSecret:  cfg.GetString("JWT_SECRET", "dev-secret-change-me"),
+		AccessTTL:  time.Duration(cfg.GetInt("ACCESS_TTL_MIN", 15)) * time.Minute,
+		RefreshTTL: time.Duration(cfg.GetInt("REFRESH_TTL_HOURS", 168)) * time.Hour,
+	}
+
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(ginmid.RequestID())
+	r.Use(ginmid.Logger())
+	r.Use(ginmid.CORS(cfg.GetList("CORS_ALLOW_ORIGINS"), cfg.GetBool("CORS_ALLOW_CREDENTIALS", false)))
+	r.Use(ginmid.ErrorHandler())
+
+	r.NoRoute(handler.NotFound)
+	r.GET("/healthz", ginmid.Wrap(h.Healthz))
+
+	api := r.Group("/api/v1/auth")
+	api.POST("/bootstrap", ginmid.RateLimit(rdb, "rl:bootstrap", 10, time.Minute), ginmid.Wrap(h.Bootstrap))
+	api.POST("/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
+	api.POST("/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
+	api.POST("/refresh", ginmid.Wrap(h.Refresh))
+	api.POST("/logout", ginmid.AuthN(h.JWTSecret), ginmid.Wrap(h.Logout))
+
+	if err := r.Run(":8080"); err != nil {
+		log.Fatal(err)
+	}
+}
