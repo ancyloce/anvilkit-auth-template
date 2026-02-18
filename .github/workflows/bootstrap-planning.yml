@@ -1,0 +1,48 @@
+name: planning bootstrap
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+    paths:
+      - docs/issues/m1-m3.md
+      - .github/workflows/bootstrap-planning.yml
+      - .github/scripts/bootstrap_planning.cjs
+  push:
+    branches: [main]
+    paths:
+      - docs/issues/m1-m3.md
+      - .github/workflows/bootstrap-planning.yml
+      - .github/scripts/bootstrap_planning.cjs
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Parse-only mode without GitHub API writes
+        required: false
+        default: 'false'
+      pr_number:
+        description: Optional PR number for posting/updating summary comment
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  bootstrap-milestones-and-issues:
+    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create milestones and issues from docs/issues/m1-m3.md
+        uses: actions/github-script@v7
+        env:
+          ISSUE_MD_PATH: docs/issues/m1-m3.md
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
+        with:
+          script: |
+            const { run } = require('./.github/scripts/bootstrap_planning.cjs');
+            await run({ github, context, core, processEnv: process.env });
