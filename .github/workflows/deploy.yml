@@ -11,6 +11,11 @@ on:
         options:
           - production
           - staging
+      overwrite_env:
+        description: Overwrite remote $DEPLOY_PATH/.env even if it already exists
+        required: false
+        default: false
+        type: boolean
   push:
     tags:
       - 'v*'
@@ -113,6 +118,68 @@ jobs:
           printf '%s\n' '${{ secrets.DEPLOY_SSH_KEY }}' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
 
+      - name: Prepare remote .env content
+        env:
+          DB_DSN: ${{ secrets.DB_DSN }}
+          REDIS_ADDR: ${{ secrets.REDIS_ADDR }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
+          ACCESS_TTL_MIN: ${{ secrets.ACCESS_TTL_MIN }}
+          REFRESH_TTL_HOURS: ${{ secrets.REFRESH_TTL_HOURS }}
+          CORS_ALLOW_CREDENTIALS: ${{ secrets.CORS_ALLOW_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          : "${DB_DSN:?missing required secret DB_DSN}"
+          : "${REDIS_ADDR:?missing required secret REDIS_ADDR}"
+          : "${JWT_SECRET:?missing required secret JWT_SECRET}"
+          : "${CORS_ALLOW_ORIGINS:?missing required secret CORS_ALLOW_ORIGINS}"
+
+          access_ttl="${ACCESS_TTL_MIN:-15}"
+          refresh_ttl="${REFRESH_TTL_HOURS:-168}"
+          cors_credentials="${CORS_ALLOW_CREDENTIALS:-false}"
+
+          cat > .deploy.env <<EOF_ENV
+DB_DSN=${DB_DSN}
+REDIS_ADDR=${REDIS_ADDR}
+JWT_SECRET=${JWT_SECRET}
+CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
+ACCESS_TTL_MIN=${access_ttl}
+REFRESH_TTL_HOURS=${refresh_ttl}
+CORS_ALLOW_CREDENTIALS=${cors_credentials}
+EOF_ENV
+          chmod 600 .deploy.env
+
+      - name: Ensure remote .env exists (or overwrite)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          OVERWRITE_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite_env || 'false' }}
+        run: |
+          set -euo pipefail
+          port="${DEPLOY_PORT:-22}"
+
+          ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$DEPLOY_PATH'"
+
+          if [[ "${OVERWRITE_ENV}" == "true" ]]; then
+            scp -P "$port" -o StrictHostKeyChecking=accept-new .deploy.env \
+              "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env"
+            ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+              "chmod 600 '$DEPLOY_PATH/.env'"
+          else
+            if ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+              "test -f '$DEPLOY_PATH/.env'"; then
+              echo "Remote .env already exists; keeping existing file."
+            else
+              scp -P "$port" -o StrictHostKeyChecking=accept-new .deploy.env \
+                "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env"
+              ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+                "chmod 600 '$DEPLOY_PATH/.env'"
+            fi
+          fi
+
       - name: Upload deployment assets
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -146,3 +213,7 @@ jobs:
           ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
             "chmod +x '$DEPLOY_PATH/scripts/remote_deploy.sh' && \
              '$DEPLOY_PATH/scripts/remote_deploy.sh' '$DEPLOY_PATH' '$IMAGE_TAG' '$IMAGE_OWNER' '$deps'"
+
+      - name: Cleanup local deploy env artifact
+        if: always()
+        run: rm -f .deploy.env
