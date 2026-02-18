@@ -219,9 +219,9 @@ if ! run_migrate; then
 fi
 
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
-  "${compose_cmd[@]}" up -d auth-api admin-api
+  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api
 else
-  "${compose_cmd[@]}" up -d --no-deps auth-api admin-api
+  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api
 fi
 
 echo "Container JWT env diagnostics (redacted):"
@@ -260,9 +260,9 @@ compose_cmd=(
 )
 "${compose_cmd[@]}" pull auth-api admin-api
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
-  "${compose_cmd[@]}" up -d auth-api admin-api
+  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api
 else
-  "${compose_cmd[@]}" up -d --no-deps auth-api admin-api
+  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api
 fi
 
 if healthcheck; then
