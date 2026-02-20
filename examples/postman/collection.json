@@ -97,10 +97,10 @@
             "value": "application/json"
           }
         ],
-        "url": "{{base_url_auth}}/api/v1/auth/login",
+        "url": "{{base_url_auth}}/v1/auth/login",
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"email\": \"postman@example.com\",\n  \"password\": \"passw0rd!\",\n  \"tenant_id\": \"{{tenant_id}}\"\n}"
+          "raw": "{\n  \"email\": \"postman@example.com\",\n  \"password\": \"passw0rd!\"\n}"
         }
       },
       "event": [
@@ -110,6 +110,8 @@
             "exec": [
               "const b = pm.response.json();",
               "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
+              "pm.test('has access token', ()=> pm.expect(b.data.access_token).to.be.a('string'));",
+              "pm.test('has refresh token', ()=> pm.expect(b.data.refresh_token).to.be.a('string'));",
               "pm.collectionVariables.set('access_token', b.data.access_token);",
               "pm.collectionVariables.set('refresh_token', b.data.refresh_token);"
             ]
