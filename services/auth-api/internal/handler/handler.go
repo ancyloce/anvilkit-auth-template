@@ -135,7 +135,10 @@ func (h *Handler) Login(c *gin.Context) error {
 		}
 		return err
 	}
-	if user.Status != userStatusActive || crypto.VerifyPassword(user.PasswordHash, req.Password) != nil {
+	if user.Status != userStatusActive {
+		return apperr.Unauthorized(errors.New("invalid_credentials"))
+	}
+	if crypto.VerifyPassword(user.PasswordHash, req.Password) != nil {
 		h.increaseLoginFailCount(c, key)
 		return apperr.Unauthorized(errors.New("invalid_credentials"))
 	}
