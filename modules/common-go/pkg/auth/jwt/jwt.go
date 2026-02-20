@@ -15,12 +15,18 @@ type Claims struct {
 }
 
 func Sign(secret string, uid string, tid string, typ string, ttl time.Duration) (string, error) {
+	return SignWithIssuer(secret, uid, tid, typ, ttl, "", "")
+}
+
+func SignWithIssuer(secret string, uid string, tid string, typ string, ttl time.Duration, issuer string, audience string) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		UID: uid,
 		TID: tid,
 		Typ: typ,
 		RegisteredClaims: jwtv5.RegisteredClaims{
+			Issuer:    issuer,
+			Audience:  jwtv5.ClaimStrings{audience},
 			IssuedAt:  jwtv5.NewNumericDate(now),
 			ExpiresAt: jwtv5.NewNumericDate(now.Add(ttl)),
 			Subject:   uid,

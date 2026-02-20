@@ -27,6 +27,12 @@ type RegisteredUser struct {
 	Email string
 }
 
+type LoginV1User struct {
+	ID     string
+	Email  string
+	Status int
+}
+
 func (s *Store) Register(ctx context.Context, email, password string, bcryptCost int) (*RegisteredUser, error) {
 	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -169,4 +175,18 @@ func (s *Store) RevokeRefreshToken(ctx context.Context, token string) error {
 	h := sha256.Sum256([]byte(token))
 	_, err := s.DB.Exec(ctx, `update refresh_tokens set revoked_at=now() where token_hash=$1 and revoked_at is null`, hex.EncodeToString(h[:]))
 	return err
+}
+
+func (s *Store) LoginV1(ctx context.Context, email string) (*LoginV1User, string, error) {
+	var uid, hash string
+	var status int
+	err := s.DB.QueryRow(ctx, `
+select u.id, u.email, u.status, upc.password_hash
+from users u
+join user_password_credentials upc on upc.user_id = u.id
+where lower(u.email) = lower($1)`, email).Scan(&uid, &email, &status, &hash)
+	if err != nil {
+		return nil, "", err
+	}
+	return &LoginV1User{ID: uid, Email: email, Status: status}, hash, nil
 }
