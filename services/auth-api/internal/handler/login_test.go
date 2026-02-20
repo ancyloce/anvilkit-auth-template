@@ -72,6 +72,16 @@ func TestLoginSuccess(t *testing.T) {
 	if tokenHash == body.Data.RefreshToken {
 		t.Fatalf("db token_hash should not equal raw refresh_token")
 	}
+
+	// verify that the login failure counter is cleared after successful login
+	key := "login_fail:192.0.2.1:login-ok@example.com"
+	failCount, err := rdb.Get(context.Background(), key).Int()
+	if err != nil && err != goredis.Nil {
+		t.Fatalf("redis get login fail count: %v", err)
+	}
+	if err == nil && failCount != 0 {
+		t.Fatalf("login fail count=%d, want 0 or key to be deleted", failCount)
+	}
 }
 
 func TestLoginWrongPasswordUnauthorizedAndIncr(t *testing.T) {
