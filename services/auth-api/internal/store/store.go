@@ -27,6 +27,11 @@ type RegisteredUser struct {
 	Email string
 }
 
+type LoginUser struct {
+	ID    string
+	Email string
+}
+
 func (s *Store) Register(ctx context.Context, email, password string, bcryptCost int) (*RegisteredUser, error) {
 	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -168,5 +173,38 @@ where token_hash=$1 and revoked_at is null and expires_at > now()`, hex.EncodeTo
 func (s *Store) RevokeRefreshToken(ctx context.Context, token string) error {
 	h := sha256.Sum256([]byte(token))
 	_, err := s.DB.Exec(ctx, `update refresh_tokens set revoked_at=now() where token_hash=$1 and revoked_at is null`, hex.EncodeToString(h[:]))
+	return err
+}
+
+// VerifyEmailPassword looks up a user by email, checks the password and
+// confirms the account is active (status=1). Returns the user on success or
+// an error on any failure (not found, wrong password, inactive).
+func (s *Store) VerifyEmailPassword(ctx context.Context, email, password string) (*LoginUser, error) {
+	var id, emailOut string
+	var status int
+	var pwdHash string
+	err := s.DB.QueryRow(ctx, `
+select u.id, u.email, u.status, upc.password_hash
+from users u
+join user_password_credentials upc on upc.user_id = u.id
+where u.email=$1`, email).Scan(&id, &emailOut, &status, &pwdHash)
+	if err != nil {
+		return nil, err
+	}
+	if status != 1 {
+		return nil, errors.New("user_inactive")
+	}
+	if crypto.VerifyPassword(pwdHash, password) != nil {
+		return nil, errors.New("invalid_password")
+	}
+	return &LoginUser{ID: id, Email: emailOut}, nil
+}
+
+// CreateRefreshSession inserts a new row into refresh_sessions.
+func (s *Store) CreateRefreshSession(ctx context.Context, id, userID, tokenHash, userAgent, ip string, exp time.Time) error {
+	_, err := s.DB.Exec(ctx, `
+insert into refresh_sessions(id, user_id, token_hash, user_agent, ip, expires_at, created_at)
+values($1, $2, $3, $4, $5, $6, now())`,
+		id, userID, tokenHash, userAgent, ip, exp)
 	return err
 }

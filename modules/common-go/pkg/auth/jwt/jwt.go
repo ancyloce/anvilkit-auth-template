@@ -14,17 +14,24 @@ type Claims struct {
 	jwtv5.RegisteredClaims
 }
 
-func Sign(secret string, uid string, tid string, typ string, ttl time.Duration) (string, error) {
+func Sign(secret, issuer, audience, uid, tid, typ string, ttl time.Duration) (string, error) {
 	now := time.Now()
+	rc := jwtv5.RegisteredClaims{
+		IssuedAt:  jwtv5.NewNumericDate(now),
+		ExpiresAt: jwtv5.NewNumericDate(now.Add(ttl)),
+		Subject:   uid,
+	}
+	if issuer != "" {
+		rc.Issuer = issuer
+	}
+	if audience != "" {
+		rc.Audience = jwtv5.ClaimStrings{audience}
+	}
 	claims := Claims{
 		UID: uid,
 		TID: tid,
 		Typ: typ,
-		RegisteredClaims: jwtv5.RegisteredClaims{
-			IssuedAt:  jwtv5.NewNumericDate(now),
-			ExpiresAt: jwtv5.NewNumericDate(now.Add(ttl)),
-			Subject:   uid,
-		},
+		RegisteredClaims: rc,
 	}
 	token := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secret))

@@ -10,22 +10,30 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	goredis "github.com/redis/go-redis/v9"
 
 	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
 	"anvilkit-auth-template/modules/common-go/pkg/util"
+	"anvilkit-auth-template/services/auth-api/internal/auth/token"
 	"anvilkit-auth-template/services/auth-api/internal/store"
 )
 
 type Handler struct {
-	Store          *store.Store
-	JWTSecret      string
-	AccessTTL      time.Duration
-	RefreshTTL     time.Duration
-	PasswordMinLen int
-	BcryptCost     int
+	Store           *store.Store
+	JWTSecret       string
+	JWTIssuer       string
+	JWTAudience     string
+	AccessTTL       time.Duration
+	RefreshTTL      time.Duration
+	PasswordMinLen  int
+	BcryptCost      int
+	Redis           *goredis.Client
+	LoginFailLimit  int
+	LoginFailWindow time.Duration
 }
 
 type authReq struct {
@@ -134,7 +142,7 @@ func (h *Handler) Refresh(c *gin.Context) error {
 		}
 		return err
 	}
-	at, err := ajwt.Sign(h.JWTSecret, uid, tid, "access", h.AccessTTL)
+	at, err := ajwt.Sign(h.JWTSecret, h.JWTIssuer, h.JWTAudience, uid, tid, "access", h.AccessTTL)
 	if err != nil {
 		return err
 	}
@@ -157,7 +165,7 @@ func (h *Handler) Logout(c *gin.Context) error {
 }
 
 func (h *Handler) issueTokens(ctx context.Context, uid, tid string) (string, string, error) {
-	at, err := ajwt.Sign(h.JWTSecret, uid, tid, "access", h.AccessTTL)
+	at, err := ajwt.Sign(h.JWTSecret, h.JWTIssuer, h.JWTAudience, uid, tid, "access", h.AccessTTL)
 	if err != nil {
 		return "", "", err
 	}
@@ -169,6 +177,87 @@ func (h *Handler) issueTokens(ctx context.Context, uid, tid string) (string, str
 		return "", "", err
 	}
 	return at, rt, nil
+}
+
+func (h *Handler) LoginSession(c *gin.Context) error {
+	var req struct {
+		Email    string `json:"email" binding:"required"`
+		Password string `json:"password" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		return apperr.BadRequest(err)
+	}
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	if _, err := mail.ParseAddress(email); err != nil {
+		return apperr.BadRequest(fmt.Errorf("invalid_email"))
+	}
+
+	ip := c.ClientIP()
+	failKey := fmt.Sprintf("login_fail:%s:%s", ip, email)
+
+	// Check rate limit before touching DB.
+	if h.Redis != nil && h.LoginFailLimit > 0 {
+		n, err := h.Redis.Get(c.Request.Context(), failKey).Int()
+		if err == nil && n >= h.LoginFailLimit {
+			return apperr.RateLimited(errors.New("too_many_requests"))
+		}
+	}
+
+	incFail := func() {
+		if h.Redis == nil {
+			return
+		}
+		ctx := c.Request.Context()
+		// Use a pipeline so INCR and EXPIRE are sent in a single round-trip.
+		// If the server crashes between the two calls the key may not expire;
+		// this matches the existing ratelimit middleware's trade-off.
+		pipe := h.Redis.Pipeline()
+		incrCmd := pipe.Incr(ctx, failKey)
+		pipe.Expire(ctx, failKey, h.LoginFailWindow)
+		_, _ = pipe.Exec(ctx)
+		_ = incrCmd
+	}
+
+	u, err := h.Store.VerifyEmailPassword(c.Request.Context(), email, req.Password)
+	if err != nil {
+		incFail()
+		return apperr.Unauthorized(errors.New("invalid_credentials"))
+	}
+
+	// Clear fail counter on success.
+	if h.Redis != nil {
+		h.Redis.Del(c.Request.Context(), failKey)
+	}
+
+	rt, err := token.GenRefreshToken(32)
+	if err != nil {
+		return err
+	}
+	rtHash := token.HashRefreshToken(rt)
+	rtExp := time.Now().Add(h.RefreshTTL)
+
+	sessionID := uuid.NewString()
+	if err = h.Store.CreateRefreshSession(
+		c.Request.Context(), sessionID, u.ID, rtHash,
+		c.GetHeader("User-Agent"), ip, rtExp,
+	); err != nil {
+		return err
+	}
+
+	// tid is intentionally empty: /v1/auth/login is tenant-agnostic.
+	at, err := ajwt.Sign(h.JWTSecret, h.JWTIssuer, h.JWTAudience, u.ID, "", "access", h.AccessTTL)
+	if err != nil {
+		return err
+	}
+
+	resp.OK(c, map[string]any{
+		"access_token":       at,
+		"expires_in":         int(h.AccessTTL.Seconds()),
+		"refresh_token":      rt,
+		"refresh_expires_in": int(h.RefreshTTL.Seconds()),
+		"user":               map[string]any{"id": u.ID, "email": u.Email},
+	})
+	return nil
 }
 
 func NotFound(c *gin.Context) {
