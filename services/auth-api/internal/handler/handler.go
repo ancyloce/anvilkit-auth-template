@@ -175,7 +175,13 @@ func (h *Handler) Refresh(c *gin.Context) error {
 	uid, _, err := h.Store.RotateRefreshToken(c, req.RefreshToken, newRT, time.Now().Add(h.RefreshTTL))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return apperr.Unauthorized(err)
+			return apperr.Unauthorized(err).WithData(map[string]any{"reason": "session_revoked"})
+		}
+		if errors.Is(err, store.ErrRefreshRevoked) {
+			return apperr.Unauthorized(err).WithData(map[string]any{"reason": "session_revoked"})
+		}
+		if errors.Is(err, store.ErrRefreshExpired) {
+			return apperr.Unauthorized(err).WithData(map[string]any{"reason": "refresh_expired"})
 		}
 		return err
 	}
@@ -183,7 +189,12 @@ func (h *Handler) Refresh(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
-	resp.OK(c, map[string]any{"access_token": at, "refresh_token": newRT, "user_id": uid})
+	resp.OK(c, map[string]any{
+		"access_token":       at,
+		"expires_in":         int(h.AccessTTL.Round(time.Second).Seconds()),
+		"refresh_token":      newRT,
+		"refresh_expires_in": int(h.RefreshTTL.Round(time.Second).Seconds()),
+	})
 	return nil
 }
 

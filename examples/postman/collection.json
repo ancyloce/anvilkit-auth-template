@@ -142,6 +142,10 @@
             "exec": [
               "const b = pm.response.json();",
               "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
+              "pm.test('has access token', ()=> pm.expect(b.data.access_token).to.be.a('string'));",
+              "pm.test('has refresh token', ()=> pm.expect(b.data.refresh_token).to.be.a('string'));",
+              "pm.test('has expires_in', ()=> pm.expect(b.data.expires_in).to.be.a('number'));",
+              "pm.test('has refresh_expires_in', ()=> pm.expect(b.data.refresh_expires_in).to.be.a('number'));",
               "pm.collectionVariables.set('access_token', b.data.access_token);",
               "pm.collectionVariables.set('refresh_token', b.data.refresh_token);"
             ]
