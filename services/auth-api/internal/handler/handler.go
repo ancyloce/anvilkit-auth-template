@@ -208,14 +208,11 @@ func (h *Handler) LoginSession(c *gin.Context) error {
 			return
 		}
 		ctx := c.Request.Context()
-		// Use a pipeline so INCR and EXPIRE are sent in a single round-trip.
-		// If the server crashes between the two calls the key may not expire;
-		// this matches the existing ratelimit middleware's trade-off.
-		pipe := h.Redis.Pipeline()
-		incrCmd := pipe.Incr(ctx, failKey)
-		pipe.Expire(ctx, failKey, h.LoginFailWindow)
-		_, _ = pipe.Exec(ctx)
-		_ = incrCmd
+		// Fixed-window: set the TTL only when the key is first created.
+		n, err := h.Redis.Incr(ctx, failKey).Result()
+		if err == nil && n == 1 {
+			_ = h.Redis.Expire(ctx, failKey, h.LoginFailWindow).Err()
+		}
 	}
 
 	u, err := h.Store.VerifyEmailPassword(c.Request.Context(), email, req.Password)
