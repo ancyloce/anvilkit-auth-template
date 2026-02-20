@@ -30,6 +30,8 @@ func main() {
 
 	h := &handler.Handler{Store: &store.Store{DB: db}, Enforcer: e}
 	secret := cfg.GetString("JWT_SECRET", "dev-secret-change-me")
+	issuer := cfg.GetString("JWT_ISSUER", "anvilkit-auth")
+	audience := cfg.GetString("JWT_AUDIENCE", "anvilkit-clients")
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -41,7 +43,7 @@ func main() {
 	r.NoRoute(handler.NotFound)
 	r.GET("/healthz", ginmid.Wrap(h.Healthz))
 
-	admin := r.Group("/api/v1/admin", ginmid.AuthN(secret), handler.MustTenantMatch())
+	admin := r.Group("/api/v1/admin", ginmid.AuthN(secret, issuer, audience), handler.MustTenantMatch())
 	admin.GET("/tenants/:tenantId/me/roles", ginmid.Wrap(h.MeRoles))
 	admin.POST("/tenants/:tenantId/users/:userId/roles/:role", ginmid.Wrap(h.AssignRole))
 

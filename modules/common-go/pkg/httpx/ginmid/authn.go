@@ -10,7 +10,7 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 )
 
-func AuthN(secret string) gin.HandlerFunc {
+func AuthN(secret, issuer, audience string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		raw := strings.TrimSpace(c.GetHeader("Authorization"))
 		if !strings.HasPrefix(raw, "Bearer ") {
@@ -19,7 +19,7 @@ func AuthN(secret string) gin.HandlerFunc {
 			return
 		}
 		token := strings.TrimSpace(strings.TrimPrefix(raw, "Bearer "))
-		claims, err := ajwt.Parse(secret, token)
+		claims, err := ajwt.Parse(secret, issuer, audience, token)
 		if err != nil || claims.Typ != "access" {
 			_ = c.Error(apperr.Unauthorized(errors.New("invalid_access_token")))
 			c.Abort()

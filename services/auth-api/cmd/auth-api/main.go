@@ -32,12 +32,17 @@ func main() {
 	}
 
 	h := &handler.Handler{
-		Store:          &store.Store{DB: db},
-		JWTSecret:      authCfg.JWTSecret,
-		AccessTTL:      authCfg.AccessTTL,
-		RefreshTTL:     authCfg.RefreshTTL,
-		PasswordMinLen: authCfg.PasswordMinLen,
-		BcryptCost:     authCfg.BcryptCost,
+		Store:           &store.Store{DB: db},
+		Redis:           rdb,
+		JWTIssuer:       authCfg.JWTIssuer,
+		JWTAudience:     authCfg.JWTAudience,
+		JWTSecret:       authCfg.JWTSecret,
+		AccessTTL:       authCfg.AccessTTL,
+		RefreshTTL:      authCfg.RefreshTTL,
+		PasswordMinLen:  authCfg.PasswordMinLen,
+		BcryptCost:      authCfg.BcryptCost,
+		LoginFailLimit:  authCfg.LoginFailLimit,
+		LoginFailWindow: authCfg.LoginFailWindow,
 	}
 
 	r := gin.New()
@@ -55,10 +60,11 @@ func main() {
 	api.POST("/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
 	api.POST("/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
 	api.POST("/refresh", ginmid.Wrap(h.Refresh))
-	api.POST("/logout", ginmid.AuthN(h.JWTSecret), ginmid.Wrap(h.Logout))
+	api.POST("/logout", ginmid.AuthN(h.JWTSecret, h.JWTIssuer, h.JWTAudience), ginmid.Wrap(h.Logout))
 
 	v1 := r.Group("/v1/auth")
 	v1.POST("/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
+	v1.POST("/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
 
 	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)
