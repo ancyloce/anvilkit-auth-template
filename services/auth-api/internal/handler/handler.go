@@ -153,9 +153,9 @@ func (h *Handler) Login(c *gin.Context) error {
 
 	resp.OK(c, map[string]any{
 		"access_token":       at,
-		"expires_in":         int(h.AccessTTL.Seconds()),
+		"expires_in":         int(h.AccessTTL.Round(time.Second).Seconds()),
 		"refresh_token":      rt,
-		"refresh_expires_in": int(h.RefreshTTL.Seconds()),
+		"refresh_expires_in": int(h.RefreshTTL.Round(time.Second).Seconds()),
 		"user":               map[string]any{"id": user.ID, "email": user.Email},
 	})
 	return nil
