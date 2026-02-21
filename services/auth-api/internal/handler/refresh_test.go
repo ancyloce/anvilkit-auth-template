@@ -13,12 +13,12 @@ import (
 
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
-	"anvilkit-auth-template/services/auth-api/internal/store"
+	"anvilkit-auth-template/services/auth-api/internal/testutil"
 )
 
 func TestRefreshSuccessRotation(t *testing.T) {
 	db := newTestDB(t)
-	clearAuthTables(t, db)
+	testutil.TruncateAuthTables(t, db)
 
 	uid := "refresh-success-user"
 	seedRefreshUser(t, db, uid, "refresh-success@example.com")
@@ -32,7 +32,7 @@ values($1,$2,$3,$4,now())`, oldID, uid, hex.EncodeToString(oldHash[:]), time.Now
 		t.Fatalf("insert old refresh session: %v", err)
 	}
 
-	r := newRefreshRouter(db)
+	r := newRefreshRouter(t, db)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/refresh", map[string]string{"refresh_token": oldToken})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status=%d want=%d body=%s", res.Code, http.StatusOK, res.Body.String())
@@ -90,7 +90,7 @@ values($1,$2,$3,$4,now())`, oldID, uid, hex.EncodeToString(oldHash[:]), time.Now
 
 func TestRefreshReplayFailsWithSessionRevoked(t *testing.T) {
 	db := newTestDB(t)
-	clearAuthTables(t, db)
+	testutil.TruncateAuthTables(t, db)
 
 	uid := "refresh-replay-user"
 	seedRefreshUser(t, db, uid, "refresh-replay@example.com")
@@ -103,7 +103,7 @@ values($1,$2,$3,$4,now())`, "refresh-replay-old", uid, hex.EncodeToString(oldHas
 		t.Fatalf("insert old refresh session: %v", err)
 	}
 
-	r := newRefreshRouter(db)
+	r := newRefreshRouter(t, db)
 	first := performJSONRequest(t, r, http.MethodPost, "/v1/auth/refresh", map[string]string{"refresh_token": oldToken})
 	if first.Code != http.StatusOK {
 		t.Fatalf("first refresh status=%d body=%s", first.Code, first.Body.String())
@@ -130,7 +130,7 @@ values($1,$2,$3,$4,now())`, "refresh-replay-old", uid, hex.EncodeToString(oldHas
 
 func TestRefreshExpiredFails(t *testing.T) {
 	db := newTestDB(t)
-	clearAuthTables(t, db)
+	testutil.TruncateAuthTables(t, db)
 
 	uid := "refresh-expired-user"
 	seedRefreshUser(t, db, uid, "refresh-expired@example.com")
@@ -143,7 +143,7 @@ values($1,$2,$3,$4,now())`, "refresh-expired-old", uid, hex.EncodeToString(h[:])
 		t.Fatalf("insert expired refresh session: %v", err)
 	}
 
-	r := newRefreshRouter(db)
+	r := newRefreshRouter(t, db)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/refresh", map[string]string{"refresh_token": token})
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d want=%d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
@@ -165,7 +165,7 @@ values($1,$2,$3,$4,now())`, "refresh-expired-old", uid, hex.EncodeToString(h[:])
 
 func TestRefreshRevokedFails(t *testing.T) {
 	db := newTestDB(t)
-	clearAuthTables(t, db)
+	testutil.TruncateAuthTables(t, db)
 
 	uid := "refresh-revoked-user"
 	seedRefreshUser(t, db, uid, "refresh-revoked@example.com")
@@ -178,7 +178,7 @@ values($1,$2,$3,$4,now(),now())`, "refresh-revoked-old", uid, hex.EncodeToString
 		t.Fatalf("insert revoked refresh session: %v", err)
 	}
 
-	r := newRefreshRouter(db)
+	r := newRefreshRouter(t, db)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/refresh", map[string]string{"refresh_token": token})
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d want=%d body=%s", res.Code, http.StatusUnauthorized, res.Body.String())
@@ -198,18 +198,12 @@ values($1,$2,$3,$4,now(),now())`, "refresh-revoked-old", uid, hex.EncodeToString
 	}
 }
 
-func newRefreshRouter(db *pgxpool.Pool) *gin.Engine {
+func newRefreshRouter(t *testing.T, db *pgxpool.Pool) *gin.Engine {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(ginmid.RequestID(), ginmid.ErrorHandler())
-	h := &Handler{
-		Store:       &store.Store{DB: db},
-		JWTIssuer:   "anvilkit-auth",
-		JWTAudience: "anvilkit-clients",
-		JWTSecret:   "test-secret",
-		AccessTTL:   15 * time.Minute,
-		RefreshTTL:  168 * time.Hour,
-	}
+	h := newTestAuthHandler(t, db, nil)
 	r.POST("/v1/auth/refresh", ginmid.Wrap(h.Refresh))
 	return r
 }
