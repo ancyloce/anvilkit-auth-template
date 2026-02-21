@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,17 +16,17 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
 	"anvilkit-auth-template/services/auth-api/internal/auth/crypto"
-	"anvilkit-auth-template/services/auth-api/internal/store"
+	"anvilkit-auth-template/services/auth-api/internal/testutil"
 )
 
 func TestLoginSuccess(t *testing.T) {
 	db := newTestDB(t)
 	rdb := newTestRedis(t)
-	clearAuthTables(t, db)
-	clearLoginFailKeys(t, rdb)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
 
 	seedLoginUser(t, db, "login-ok@example.com", "Passw0rd!", 1)
-	r := newLoginRouter(db, rdb)
+	r := newLoginRouter(t, db, rdb)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
 		"email":    "login-ok@example.com",
 		"password": "Passw0rd!",
@@ -87,11 +86,11 @@ func TestLoginSuccess(t *testing.T) {
 func TestLoginWrongPasswordUnauthorizedAndIncr(t *testing.T) {
 	db := newTestDB(t)
 	rdb := newTestRedis(t)
-	clearAuthTables(t, db)
-	clearLoginFailKeys(t, rdb)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
 
 	seedLoginUser(t, db, "wrong-pass@example.com", "Passw0rd!", 1)
-	r := newLoginRouter(db, rdb)
+	r := newLoginRouter(t, db, rdb)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
 		"email":    "wrong-pass@example.com",
 		"password": "bad-pass",
@@ -119,10 +118,10 @@ func TestLoginWrongPasswordUnauthorizedAndIncr(t *testing.T) {
 func TestLoginUserNotFoundUnauthorizedAndIncr(t *testing.T) {
 	db := newTestDB(t)
 	rdb := newTestRedis(t)
-	clearAuthTables(t, db)
-	clearLoginFailKeys(t, rdb)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
 
-	r := newLoginRouter(db, rdb)
+	r := newLoginRouter(t, db, rdb)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
 		"email":    "notfound@example.com",
 		"password": "Passw0rd!",
@@ -143,10 +142,10 @@ func TestLoginUserNotFoundUnauthorizedAndIncr(t *testing.T) {
 func TestLoginRateLimited(t *testing.T) {
 	db := newTestDB(t)
 	rdb := newTestRedis(t)
-	clearAuthTables(t, db)
-	clearLoginFailKeys(t, rdb)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
 
-	r := newLoginRouter(db, rdb)
+	r := newLoginRouter(t, db, rdb)
 	key := "login_fail:192.0.2.1:limited@example.com"
 	if err := rdb.Set(context.Background(), key, "5", 10*time.Minute).Err(); err != nil {
 		t.Fatalf("preset rate-limit key: %v", err)
@@ -168,21 +167,12 @@ func TestLoginRateLimited(t *testing.T) {
 	}
 }
 
-func newLoginRouter(db *pgxpool.Pool, rdb *goredis.Client) *gin.Engine {
+func newLoginRouter(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client) *gin.Engine {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(ginmid.RequestID(), ginmid.ErrorHandler())
-	h := &Handler{
-		Store:           &store.Store{DB: db},
-		Redis:           rdb,
-		JWTIssuer:       "anvilkit-auth",
-		JWTAudience:     "anvilkit-clients",
-		JWTSecret:       "test-secret",
-		AccessTTL:       15 * time.Minute,
-		RefreshTTL:      168 * time.Hour,
-		LoginFailLimit:  5,
-		LoginFailWindow: 10 * time.Minute,
-	}
+	h := newTestAuthHandler(t, db, rdb)
 	r.POST("/v1/auth/login", func(c *gin.Context) { c.Request.RemoteAddr = "192.0.2.1:12345"; ginmid.Wrap(h.Login)(c) })
 	return r
 }
@@ -201,35 +191,5 @@ func seedLoginUser(t *testing.T, db *pgxpool.Pool, email, password string, statu
 	_, err = db.Exec(context.Background(), `insert into user_password_credentials(user_id,password_hash,updated_at) values($1,$2,now())`, id, h)
 	if err != nil {
 		t.Fatalf("insert credential: %v", err)
-	}
-}
-
-func newTestRedis(t *testing.T) *goredis.Client {
-	t.Helper()
-	addr := strings.TrimSpace(os.Getenv("TEST_REDIS_ADDR"))
-	if addr == "" {
-		addr = strings.TrimSpace(os.Getenv("REDIS_ADDR"))
-	}
-	if addr == "" {
-		addr = "localhost:6379"
-	}
-	rdb := goredis.NewClient(&goredis.Options{Addr: addr})
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		t.Fatalf("redis ping: %v", err)
-	}
-	t.Cleanup(func() { _ = rdb.Close() })
-	return rdb
-}
-
-func clearLoginFailKeys(t *testing.T, rdb *goredis.Client) {
-	t.Helper()
-	keys, err := rdb.Keys(context.Background(), "login_fail:*").Result()
-	if err != nil {
-		t.Fatalf("redis keys: %v", err)
-	}
-	if len(keys) > 0 {
-		if err = rdb.Del(context.Background(), keys...).Err(); err != nil {
-			t.Fatalf("redis del keys: %v", err)
-		}
 	}
 }
