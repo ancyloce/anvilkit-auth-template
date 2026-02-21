@@ -59,7 +59,7 @@ func lockTestDB(t *testing.T, db *pgxpool.Pool) *pgxpool.Conn {
 		select {
 		case <-deadlineCtx.Done():
 			conn.Release()
-			t.Fatalf("timeout waiting advisory lock for test db after 15s")
+			t.Fatalf("timed out waiting for advisory lock for test db after 15s")
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
