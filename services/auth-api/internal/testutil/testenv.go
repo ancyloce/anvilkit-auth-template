@@ -27,9 +27,34 @@ func MustTestDB(t *testing.T) *pgxpool.Pool {
 		db.Close()
 		t.Fatalf("db ping: %v", err)
 	}
+	lockConn := lockTestDB(t, db)
+	t.Cleanup(func() {
+		unlockTestDB(t, lockConn)
+		lockConn.Release()
+	})
 	t.Cleanup(func() { db.Close() })
 	ApplyMigrations(t, db)
 	return db
+}
+
+func lockTestDB(t *testing.T, db *pgxpool.Pool) *pgxpool.Conn {
+	t.Helper()
+	conn, err := db.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire lock conn: %v", err)
+	}
+	if _, err = conn.Exec(context.Background(), `select pg_advisory_lock($1)`, int64(240808)); err != nil {
+		conn.Release()
+		t.Fatalf("pg_advisory_lock: %v", err)
+	}
+	return conn
+}
+
+func unlockTestDB(t *testing.T, conn *pgxpool.Conn) {
+	t.Helper()
+	if _, err := conn.Exec(context.Background(), `select pg_advisory_unlock($1)`, int64(240808)); err != nil {
+		t.Fatalf("pg_advisory_unlock: %v", err)
+	}
 }
 
 func MustTestRedis(t *testing.T) *goredis.Client {
