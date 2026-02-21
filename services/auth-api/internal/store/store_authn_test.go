@@ -49,6 +49,20 @@ values($1,$2,$3,$4,now())`, "store-session-old", uid, oldHashHex, time.Now().Add
 	if revokedAt == nil || replacedBy == nil || *replacedBy == "" {
 		t.Fatalf("old session should be revoked and linked: revokedAt=%v replacedBy=%v", revokedAt, replacedBy)
 	}
+
+	// Verify the new session was created with the expected token hash and that
+	// the old session's replaced_by points to the new session.
+	newHash := sha256.Sum256([]byte(newToken))
+	newHashHex := hex.EncodeToString(newHash[:])
+
+	var newSessionID string
+	err = db.QueryRow(context.Background(), `select id from refresh_sessions where token_hash=$1`, newHashHex).Scan(&newSessionID)
+	if err != nil {
+		t.Fatalf("query new session: %v", err)
+	}
+	if *replacedBy != newSessionID {
+		t.Fatalf("old session replaced_by=%q, want new session id=%q", *replacedBy, newSessionID)
+	}
 }
 
 func TestStoreRevokeRefreshTokenMakesRotationFail(t *testing.T) {
