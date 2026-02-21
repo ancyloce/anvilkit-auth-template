@@ -72,9 +72,13 @@ jobs:
           REDIS_ADDR: localhost:6379
           TEST_DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
           TEST_REDIS_ADDR: localhost:6379
-          JWT_SECRET: test-secret
-          JWT_ISSUER: anvilkit-auth
-          JWT_AUDIENCE: anvilkit-clients
+          JWT_SECRET: ci-secret
+          JWT_ISSUER: http://ci.local
+          JWT_AUDIENCE: ci-aud
+          PASSWORD_MIN_LEN: 8
+          BCRYPT_COST: 10
+          LOGIN_FAIL_LIMIT: 5
+          LOGIN_FAIL_WINDOW_MIN: 15
         run: |
           for dir in modules/common-go services/auth-api services/admin-api; do
             (cd "$dir" && go test ./... -count=1)
@@ -86,9 +90,13 @@ jobs:
           REDIS_ADDR: localhost:6379
           TEST_DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
           TEST_REDIS_ADDR: localhost:6379
-          JWT_SECRET: test-secret
-          JWT_ISSUER: anvilkit-auth
-          JWT_AUDIENCE: anvilkit-clients
+          JWT_SECRET: ci-secret
+          JWT_ISSUER: http://ci.local
+          JWT_AUDIENCE: ci-aud
+          PASSWORD_MIN_LEN: 8
+          BCRYPT_COST: 10
+          LOGIN_FAIL_LIMIT: 5
+          LOGIN_FAIL_WINDOW_MIN: 15
         run: go test ./... -count=1
 
   lint:
