@@ -208,7 +208,20 @@ func (h *Handler) Logout(c *gin.Context) error {
 	if err := h.Store.RevokeRefreshToken(c, req.RefreshToken); err != nil {
 		return err
 	}
-	resp.OK(c, map[string]any{"revoked": true})
+	resp.OK(c, map[string]any{"ok": true})
+	return nil
+}
+
+func (h *Handler) LogoutAll(c *gin.Context) error {
+	uid := strings.TrimSpace(c.GetString("uid"))
+	if uid == "" {
+		return apperr.Unauthorized(errors.New("invalid_access_token"))
+	}
+	revokedCount, err := h.Store.RevokeAllRefreshTokensByUser(c, uid)
+	if err != nil {
+		return err
+	}
+	resp.OK(c, map[string]any{"ok": true, "revoked_count": revokedCount})
 	return nil
 }
 

@@ -60,12 +60,15 @@ func main() {
 	api.POST("/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
 	api.POST("/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
 	api.POST("/refresh", ginmid.Wrap(h.Refresh))
-	api.POST("/logout", ginmid.AuthN(h.JWTSecret, h.JWTIssuer, h.JWTAudience), ginmid.Wrap(h.Logout))
+	api.POST("/logout", ginmid.Wrap(h.Logout))
+	api.POST("/logout_all", ginmid.AuthN(h.JWTSecret, h.JWTIssuer, h.JWTAudience), ginmid.Wrap(h.LogoutAll))
 
 	v1 := r.Group("/v1/auth")
 	v1.POST("/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
 	v1.POST("/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
 	v1.POST("/refresh", ginmid.Wrap(h.Refresh))
+	v1.POST("/logout", ginmid.Wrap(h.Logout))
+	v1.POST("/logout_all", ginmid.AuthN(h.JWTSecret, h.JWTIssuer, h.JWTAudience), ginmid.Wrap(h.LogoutAll))
 
 	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)

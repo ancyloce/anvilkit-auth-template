@@ -213,3 +213,11 @@ func (s *Store) RevokeRefreshToken(ctx context.Context, token string) error {
 	_, err := s.DB.Exec(ctx, `update refresh_sessions set revoked_at=now() where token_hash=$1 and revoked_at is null`, hex.EncodeToString(h[:]))
 	return err
 }
+
+func (s *Store) RevokeAllRefreshTokensByUser(ctx context.Context, userID string) (int64, error) {
+	ct, err := s.DB.Exec(ctx, `update refresh_sessions set revoked_at=now() where user_id=$1 and revoked_at is null`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return ct.RowsAffected(), nil
+}
