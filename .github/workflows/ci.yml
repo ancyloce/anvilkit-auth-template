@@ -70,7 +70,11 @@ jobs:
         env:
           DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
           REDIS_ADDR: localhost:6379
+          TEST_DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
+          TEST_REDIS_ADDR: localhost:6379
           JWT_SECRET: test-secret
+          JWT_ISSUER: anvilkit-auth
+          JWT_AUDIENCE: anvilkit-clients
         run: |
           for dir in modules/common-go services/auth-api services/admin-api; do
             (cd "$dir" && go test ./... -count=1)
@@ -80,7 +84,11 @@ jobs:
         env:
           DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
           REDIS_ADDR: localhost:6379
+          TEST_DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
+          TEST_REDIS_ADDR: localhost:6379
           JWT_SECRET: test-secret
+          JWT_ISSUER: anvilkit-auth
+          JWT_AUDIENCE: anvilkit-clients
         run: go test ./... -count=1
 
   lint:

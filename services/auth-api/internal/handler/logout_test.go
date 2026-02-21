@@ -14,12 +14,12 @@ import (
 	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
-	"anvilkit-auth-template/services/auth-api/internal/store"
+	"anvilkit-auth-template/services/auth-api/internal/testutil"
 )
 
 func TestLogoutRevokesSessionAndRefreshFails(t *testing.T) {
 	db := newTestDB(t)
-	clearAuthTables(t, db)
+	testutil.TruncateAuthTables(t, db)
 
 	uid := "logout-user"
 	seedRefreshUser(t, db, uid, "logout@example.com")
@@ -32,7 +32,7 @@ values($1,$2,$3,$4,now())`, "logout-session", uid, hex.EncodeToString(h[:]), tim
 		t.Fatalf("insert refresh session: %v", err)
 	}
 
-	r := newLogoutRouter(db)
+	r := newLogoutRouter(t, db)
 	logoutRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/logout", map[string]string{"refresh_token": refreshToken})
 	if logoutRes.Code != http.StatusOK {
 		t.Fatalf("logout status=%d want=%d body=%s", logoutRes.Code, http.StatusOK, logoutRes.Body.String())
@@ -69,7 +69,7 @@ values($1,$2,$3,$4,now())`, "logout-session", uid, hex.EncodeToString(h[:]), tim
 
 func TestLogoutAllRevokesAllSessions(t *testing.T) {
 	db := newTestDB(t)
-	clearAuthTables(t, db)
+	testutil.TruncateAuthTables(t, db)
 
 	uid := "logout-all-user"
 	seedRefreshUser(t, db, uid, "logout-all@example.com")
@@ -80,8 +80,8 @@ func TestLogoutAllRevokesAllSessions(t *testing.T) {
 	seedRefreshUser(t, db, otherUID, "logout-all-other@example.com")
 	seedRefreshSession(t, db, "logout-all-session-other", otherUID, "logout-all-token-other")
 
-	r := newLogoutRouter(db)
-	accessToken, err := ajwt.Sign("test-secret", "anvilkit-auth", "anvilkit-clients", uid, "", "access", 15*time.Minute)
+	r := newLogoutRouter(t, db)
+	accessToken, err := ajwt.Sign(mustJWTSecret(t), "anvilkit-auth", "anvilkit-clients", uid, "", "access", 15*time.Minute)
 	if err != nil {
 		t.Fatalf("sign access token: %v", err)
 	}
@@ -127,18 +127,12 @@ func TestLogoutAllRevokesAllSessions(t *testing.T) {
 	}
 }
 
-func newLogoutRouter(db *pgxpool.Pool) *gin.Engine {
+func newLogoutRouter(t *testing.T, db *pgxpool.Pool) *gin.Engine {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(ginmid.RequestID(), ginmid.ErrorHandler())
-	h := &Handler{
-		Store:       &store.Store{DB: db},
-		JWTIssuer:   "anvilkit-auth",
-		JWTAudience: "anvilkit-clients",
-		JWTSecret:   "test-secret",
-		AccessTTL:   15 * time.Minute,
-		RefreshTTL:  168 * time.Hour,
-	}
+	h := newTestAuthHandler(t, db, nil)
 	r.POST("/v1/auth/logout", ginmid.Wrap(h.Logout))
 	r.POST("/v1/auth/logout_all", ginmid.AuthN(h.JWTSecret, h.JWTIssuer, h.JWTAudience), ginmid.Wrap(h.LogoutAll))
 	r.POST("/v1/auth/refresh", ginmid.Wrap(h.Refresh))

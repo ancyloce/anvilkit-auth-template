@@ -1,14 +1,8 @@
 package handler
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -17,11 +11,12 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
 	"anvilkit-auth-template/services/auth-api/internal/store"
+	"anvilkit-auth-template/services/auth-api/internal/testutil"
 )
 
 func TestRegisterSuccess(t *testing.T) {
 	db := newTestDB(t)
-	clearAuthTables(t, db)
+	testutil.TruncateAuthTables(t, db)
 
 	r := newRegisterRouter(db, 8)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
@@ -67,7 +62,7 @@ func TestRegisterSuccess(t *testing.T) {
 
 func TestRegisterDuplicateEmail(t *testing.T) {
 	db := newTestDB(t)
-	clearAuthTables(t, db)
+	testutil.TruncateAuthTables(t, db)
 
 	r := newRegisterRouter(db, 8)
 	performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
@@ -93,7 +88,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 
 func TestRegisterWeakPassword(t *testing.T) {
 	db := newTestDB(t)
-	clearAuthTables(t, db)
+	testutil.TruncateAuthTables(t, db)
 
 	r := newRegisterRouter(db, 10)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
@@ -128,89 +123,4 @@ func newRegisterRouter(db *pgxpool.Pool, passwordMinLen int) *gin.Engine {
 	h := &Handler{Store: &store.Store{DB: db}, PasswordMinLen: passwordMinLen, BcryptCost: 4}
 	r.POST("/v1/auth/register", ginmid.Wrap(h.Register))
 	return r
-}
-
-func performJSONRequest(t *testing.T, r *gin.Engine, method, path string, body any) *httptest.ResponseRecorder {
-	t.Helper()
-	b, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("json marshal: %v", err)
-	}
-	req := httptest.NewRequest(method, path, bytes.NewBuffer(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	return w
-}
-
-func performAuthedJSONRequest(t *testing.T, r *gin.Engine, method, path, accessToken string, body any) *httptest.ResponseRecorder {
-	t.Helper()
-	b, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("json marshal: %v", err)
-	}
-	req := httptest.NewRequest(method, path, bytes.NewBuffer(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	return w
-}
-
-func decodeResponse(t *testing.T, res *httptest.ResponseRecorder, out any) {
-	t.Helper()
-	if err := json.Unmarshal(res.Body.Bytes(), out); err != nil {
-		t.Fatalf("json unmarshal: %v body=%s", err, res.Body.String())
-	}
-}
-
-func newTestDB(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("TEST_DB_DSN"))
-	if dsn == "" {
-		dsn = strings.TrimSpace(os.Getenv("DB_DSN"))
-	}
-	if dsn == "" {
-		dsn = "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable"
-	}
-	db, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	applyMigrations(t, db)
-	return db
-}
-
-func applyMigrations(t *testing.T, db *pgxpool.Pool) {
-	t.Helper()
-	for _, name := range []string{"001_init.sql", "002_authn_core.sql"} {
-		path := filepath.Join("..", "..", "migrations", name)
-		sql, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read migration %s: %v", name, err)
-		}
-		if _, err = db.Exec(context.Background(), string(sql)); err != nil {
-			// Migrations may have already been applied by CI; treat errors as
-			// non-fatal so tests can run against a pre-migrated database.
-			t.Logf("migration %s: %v (may already be applied)", name, err)
-		}
-	}
-}
-
-func clearAuthTables(t *testing.T, db *pgxpool.Pool) {
-	t.Helper()
-	_, err := db.Exec(context.Background(), `
-truncate table
-  user_roles,
-  tenant_users,
-  refresh_tokens,
-  refresh_sessions,
-  user_password_credentials,
-  tenants,
-  users
-restart identity cascade`)
-	if err != nil {
-		t.Fatalf("truncate auth tables: %v", err)
-	}
 }
