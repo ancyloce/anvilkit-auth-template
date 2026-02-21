@@ -16,6 +16,12 @@ import (
 
 type Store struct{ DB *pgxpool.Pool }
 
+var (
+	ErrRefreshSessionNotFound = errors.New("refresh_session_not_found")
+	ErrRefreshExpired         = errors.New("refresh_expired")
+	ErrRefreshSessionRevoked  = errors.New("session_revoked")
+)
+
 type BootstrapResult struct {
 	UserID   string
 	TenantID string
@@ -148,6 +154,8 @@ func (s *Store) SaveRefreshSession(ctx context.Context, token, userID string, ex
 func (s *Store) RotateRefreshToken(ctx context.Context, oldToken, newToken string, exp time.Time) (string, string, error) {
 	oldH := sha256.Sum256([]byte(oldToken))
 	newH := sha256.Sum256([]byte(newToken))
+	oldHash := hex.EncodeToString(oldH[:])
+	newHash := hex.EncodeToString(newH[:])
 	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return "", "", err
@@ -158,25 +166,40 @@ func (s *Store) RotateRefreshToken(ctx context.Context, oldToken, newToken strin
 		}
 	}()
 
-	var uid string
+	var (
+		uid       string
+		expiresAt time.Time
+		revokedAt *time.Time
+	)
 	err = tx.QueryRow(ctx, `
-select user_id from refresh_sessions
-where token_hash=$1 and revoked_at is null and expires_at > now()`, hex.EncodeToString(oldH[:])).Scan(&uid)
+select user_id, expires_at, revoked_at
+from refresh_sessions
+where token_hash=$1
+for update`, oldHash).Scan(&uid, &expiresAt, &revokedAt)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", ErrRefreshSessionNotFound
+		}
 		return "", "", err
+	}
+	if revokedAt != nil {
+		return "", "", ErrRefreshSessionRevoked
+	}
+	if expiresAt.Before(time.Now()) {
+		return "", "", ErrRefreshExpired
 	}
 
 	newID := uuid.NewString()
 	if _, err = tx.Exec(ctx, `
 insert into refresh_sessions(id,user_id,token_hash,expires_at,created_at)
-values($1,$2,$3,$4,now())`, newID, uid, hex.EncodeToString(newH[:]), exp); err != nil {
+values($1,$2,$3,$4,now())`, newID, uid, newHash, exp); err != nil {
 		return "", "", err
 	}
 
 	if _, err = tx.Exec(ctx, `
 update refresh_sessions
 set revoked_at=now(), replaced_by=$2
-where token_hash=$1 and revoked_at is null`, hex.EncodeToString(oldH[:]), newID); err != nil {
+where token_hash=$1 and revoked_at is null`, oldHash, newID); err != nil {
 		return "", "", err
 	}
 	if err = tx.Commit(ctx); err != nil {
