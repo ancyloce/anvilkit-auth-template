@@ -28,12 +28,12 @@ func MustTestDB(t *testing.T) *pgxpool.Pool {
 		db.Close()
 		t.Fatalf("db ping: %v", err)
 	}
+	t.Cleanup(func() { db.Close() })
 	lockConn := lockTestDB(t, db)
 	t.Cleanup(func() {
 		unlockTestDB(t, lockConn)
 		lockConn.Release()
 	})
-	t.Cleanup(func() { db.Close() })
 	ApplyMigrations(t, db)
 	return db
 }
