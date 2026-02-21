@@ -143,6 +143,20 @@ func performJSONRequest(t *testing.T, r *gin.Engine, method, path string, body a
 	return w
 }
 
+func performAuthedJSONRequest(t *testing.T, r *gin.Engine, method, path, accessToken string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("json marshal: %v", err)
+	}
+	req := httptest.NewRequest(method, path, bytes.NewBuffer(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
 func decodeResponse(t *testing.T, res *httptest.ResponseRecorder, out any) {
 	t.Helper()
 	if err := json.Unmarshal(res.Body.Bytes(), out); err != nil {

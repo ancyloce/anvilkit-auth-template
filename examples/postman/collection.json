@@ -151,6 +151,34 @@
       ]
     },
     {
+      "name": "logout",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url_auth}}/v1/auth/logout",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "admin me roles",
       "request": {
         "method": "GET",
