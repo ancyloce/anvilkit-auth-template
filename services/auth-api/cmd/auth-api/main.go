@@ -65,6 +65,7 @@ func main() {
 	v1 := r.Group("/v1/auth")
 	v1.POST("/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
 	v1.POST("/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
+	v1.POST("/refresh", ginmid.Wrap(h.Refresh))
 
 	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)

@@ -129,7 +129,7 @@
             "value": "application/json"
           }
         ],
-        "url": "{{base_url_auth}}/api/v1/auth/refresh",
+        "url": "{{base_url_auth}}/v1/auth/refresh",
         "body": {
           "mode": "raw",
           "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}"
@@ -143,7 +143,8 @@
               "const b = pm.response.json();",
               "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
               "pm.collectionVariables.set('access_token', b.data.access_token);",
-              "pm.collectionVariables.set('refresh_token', b.data.refresh_token);"
+              "pm.collectionVariables.set('refresh_token', b.data.refresh_token);",
+              "if (b.data && b.data.tenant_id) { pm.collectionVariables.set('tenant_id', b.data.tenant_id); }"
             ]
           }
         }
