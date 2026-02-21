@@ -35,6 +35,100 @@ env:
   APP_NAME: anvilkit-auth-template
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: auth
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d auth"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Prepare Go workspace dependencies
+        run: |
+          go work sync
+          for dir in modules/common-go services/auth-api services/admin-api; do
+            (cd "$dir" && go mod download)
+          done
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Wait for Postgres readiness
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U postgres -d auth; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Postgres did not become ready in time" >&2
+          exit 1
+
+      - name: Migrate database
+        run: |
+          for file in $(find services/auth-api/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+            psql "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable" -v ON_ERROR_STOP=1 -f "$file"
+          done
+
+      - name: Run module tests
+        env:
+          DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
+          REDIS_ADDR: localhost:6379
+          TEST_DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
+          TEST_REDIS_ADDR: localhost:6379
+          JWT_SECRET: ci-secret
+          JWT_ISSUER: http://ci.local
+          JWT_AUDIENCE: ci-aud
+          PASSWORD_MIN_LEN: 8
+          BCRYPT_COST: 10
+          LOGIN_FAIL_LIMIT: 5
+          LOGIN_FAIL_WINDOW_MIN: 15
+        run: |
+          for dir in modules/common-go services/auth-api services/admin-api; do
+            (cd "$dir" && go test ./... -count=1)
+          done
+
+      - name: Run workspace root tests
+        env:
+          DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
+          REDIS_ADDR: localhost:6379
+          TEST_DB_DSN: postgres://postgres:postgres@localhost:5432/auth?sslmode=disable
+          TEST_REDIS_ADDR: localhost:6379
+          JWT_SECRET: ci-secret
+          JWT_ISSUER: http://ci.local
+          JWT_AUDIENCE: ci-aud
+          PASSWORD_MIN_LEN: 8
+          BCRYPT_COST: 10
+          LOGIN_FAIL_LIMIT: 5
+          LOGIN_FAIL_WINDOW_MIN: 15
+        run: go test ./... -count=1
+
   build:
     runs-on: ubuntu-latest
     outputs:
@@ -128,7 +222,8 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [test, build]
+    if: needs.test.result == 'success'
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'production' }}
     steps:
       - name: Checkout

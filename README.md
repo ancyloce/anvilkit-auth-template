@@ -77,6 +77,14 @@ Create a `production` environment (optionally `staging`) in your GitHub repo and
 - `DEPLOY_PORT` — SSH port (default: 22)
 - `USE_INTERNAL_DEPS` — `true` (default, use compose-managed pg/redis) or `false` (external)
 
+### Branch protection recommendation
+
+To prevent accidental deploys with broken code, configure branch protection on `main`:
+
+1. Go to **Settings → Branches → Add branch protection rule**.
+2. Enable **Require status checks to pass before merging**.
+3. Select status checks `ci / test` and `ci / lint`.
+
 ### 3. Triggering a deploy
 
 - **Manual:** `workflow_dispatch` with environment selection (`production` / `staging`)
