@@ -97,7 +97,7 @@ func MustJWTSecret(t *testing.T) string {
 
 func ApplyMigrations(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
-	for _, name := range []string{"001_init.sql", "002_authn_core.sql"} {
+	for _, name := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql"} {
 		sqlPath := filepath.Join(migrationsDir(t), name)
 		sqlBytes, err := os.ReadFile(sqlPath)
 		if err != nil {

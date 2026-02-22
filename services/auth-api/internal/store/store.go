@@ -111,7 +111,7 @@ where u.email=$1`, email).Scan(&uid, &pwdHash)
 	if _, err = tx.Exec(ctx, `insert into tenants(id,name,created_at) values($1,$2,now())`, tid, tenantName); err != nil {
 		return nil, err
 	}
-	if _, err = tx.Exec(ctx, `insert into tenant_users(tenant_id,user_id,created_at) values($1,$2,now())`, tid, uid); err != nil {
+	if _, err = tx.Exec(ctx, `insert into tenant_users(tenant_id,user_id,role,created_at) values($1,$2,'owner',now())`, tid, uid); err != nil {
 		return nil, err
 	}
 	if _, err = tx.Exec(ctx, `insert into user_roles(tenant_id,user_id,role,created_at) values($1,$2,'tenant_admin',now())`, tid, uid); err != nil {
