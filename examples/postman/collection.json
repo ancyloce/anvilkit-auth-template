@@ -36,10 +36,10 @@
             "value": "application/json"
           }
         ],
-        "url": "{{base_url_auth}}/api/v1/auth/bootstrap",
+        "url": "{{base_url_auth}}/v1/bootstrap",
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"email\": \"postman@example.com\",\n  \"password\": \"passw0rd!\",\n  \"tenant_name\": \"postman-tenant\"\n}"
+          "raw": "{\n  \"tenant_name\": \"postman-tenant\",\n  \"owner_email\": \"postman@example.com\",\n  \"owner_password\": \"Passw0rd!\"\n}"
         }
       },
       "event": [
@@ -49,9 +49,8 @@
             "exec": [
               "const b = pm.response.json();",
               "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
-              "pm.collectionVariables.set('access_token', b.data.access_token);",
-              "pm.collectionVariables.set('refresh_token', b.data.refresh_token);",
-              "pm.collectionVariables.set('tenant_id', b.data.tenant_id);"
+              "pm.test('tenant id exists', ()=> pm.expect(b.data.tenant.id).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('tenant_id', b.data.tenant.id);"
             ]
           }
         }
@@ -100,7 +99,7 @@
         "url": "{{base_url_auth}}/v1/auth/login",
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"email\": \"postman@example.com\",\n  \"password\": \"passw0rd!\"\n}"
+          "raw": "{\n  \"email\": \"postman@example.com\",\n  \"password\": \"Passw0rd!\"\n}"
         }
       },
       "event": [

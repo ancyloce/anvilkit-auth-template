@@ -44,31 +44,57 @@ type authReq struct {
 	Tenant   string `json:"tenant_name"`
 }
 
+type bootstrapReq struct {
+	TenantName    string `json:"tenant_name" binding:"required"`
+	OwnerEmail    string `json:"owner_email" binding:"required,email"`
+	OwnerPassword string `json:"owner_password" binding:"required"`
+}
+
 func (h *Handler) Healthz(c *gin.Context) error {
 	resp.OK(c, map[string]any{"status": "ok"})
 	return nil
 }
 
 func (h *Handler) Bootstrap(c *gin.Context) error {
-	var req authReq
+	var req bootstrapReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		return apperr.BadRequest(err)
 	}
-	if strings.TrimSpace(req.Tenant) == "" {
+
+	tenantName := strings.TrimSpace(req.TenantName)
+	if tenantName == "" {
 		return apperr.BadRequest(errors.New("tenant_name_required"))
 	}
-	res, err := h.Store.Bootstrap(c, req.Email, req.Password, req.Tenant, h.BcryptCost)
+	ownerEmail := strings.TrimSpace(strings.ToLower(req.OwnerEmail))
+	if ownerEmail == "" {
+		return apperr.BadRequest(errors.New("owner_email_required"))
+	}
+	if strings.TrimSpace(req.OwnerPassword) == "" {
+		return apperr.BadRequest(errors.New("owner_password_required"))
+	}
+	if len(req.OwnerPassword) < h.PasswordMinLen {
+		return apperr.BadRequest(errors.New("password_too_short"))
+	}
+
+	res, err := h.Store.Bootstrap(c, ownerEmail, req.OwnerPassword, tenantName, h.BcryptCost)
 	if err != nil {
-		if err.Error() == "invalid_password" {
-			return apperr.Unauthorized(err)
+		if errors.Is(err, store.ErrBootstrapPasswordMismatch) {
+			return apperr.Unauthorized(err).WithData(map[string]any{"reason": "owner_password_mismatch"})
+		}
+		if errors.Is(err, store.ErrTenantNameConflict) {
+			return apperr.Conflict(err).WithData(map[string]any{"reason": "tenant_name_conflict"})
 		}
 		return err
 	}
-	at, rt, err := h.issueTokens(c, res.UserID, res.TenantID, c.GetHeader("User-Agent"), c.ClientIP())
-	if err != nil {
-		return err
-	}
-	resp.OK(c, map[string]any{"user_id": res.UserID, "tenant_id": res.TenantID, "access_token": at, "refresh_token": rt})
+	c.JSON(http.StatusCreated, resp.Envelope{
+		RequestID: c.GetString("request_id"),
+		Code:      0,
+		Message:   "ok",
+		Data: map[string]any{
+			"tenant":     map[string]any{"id": res.TenantID, "name": res.TenantName},
+			"owner_user": map[string]any{"id": res.UserID, "email": res.UserEmail},
+		},
+	})
 	return nil
 }
 
