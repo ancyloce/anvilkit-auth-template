@@ -48,6 +48,16 @@ See `docs/` for architecture and API details.
 | `CORS_ALLOW_CREDENTIALS` | no | `false` | CORS credentials flag |
 | `RBAC_DIR` | no | `internal/rbac` | Casbin config directory (admin-api only) |
 
+## Database Migrations (auth-api)
+
+`services/auth-api/migrations/*.sql` is applied in lexical order (001 → 002 → 003).
+
+### Multi-tenant tables
+
+- `tenants`: tenant metadata (`id`, `name`, optional `slug`, `status`, timestamps).
+- `tenant_users`: user-to-tenant membership table with composite primary key `(tenant_id, user_id)`, `role` (`owner`/`admin`/`member`), and `created_at`.
+- A single `user` can join multiple `tenant`s (many-to-many relationship via `tenant_users`).
+
 ## Deployment (Docker Compose + GitHub Actions)
 
 `.github/workflows/deploy.yml` builds and pushes images to GHCR, then deploys to a Linux server via SSH.
