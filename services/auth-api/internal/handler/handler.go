@@ -18,6 +18,7 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
 	"anvilkit-auth-template/modules/common-go/pkg/util"
 	"anvilkit-auth-template/services/auth-api/internal/auth/crypto"
+	"anvilkit-auth-template/services/auth-api/internal/handler/dto"
 	"anvilkit-auth-template/services/auth-api/internal/store"
 )
 
@@ -37,26 +38,13 @@ type Handler struct {
 	LoginFailWindow time.Duration
 }
 
-type authReq struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6"`
-	TenantID string `json:"tenant_id"`
-	Tenant   string `json:"tenant_name"`
-}
-
-type bootstrapReq struct {
-	TenantName    string `json:"tenant_name" binding:"required"`
-	OwnerEmail    string `json:"owner_email" binding:"required,email"`
-	OwnerPassword string `json:"owner_password" binding:"required"`
-}
-
 func (h *Handler) Healthz(c *gin.Context) error {
 	resp.OK(c, map[string]any{"status": "ok"})
 	return nil
 }
 
 func (h *Handler) Bootstrap(c *gin.Context) error {
-	var req bootstrapReq
+	var req dto.BootstrapRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		return apperr.BadRequest(err)
 	}
@@ -90,19 +78,16 @@ func (h *Handler) Bootstrap(c *gin.Context) error {
 		RequestID: c.GetString("request_id"),
 		Code:      0,
 		Message:   "ok",
-		Data: map[string]any{
-			"tenant":     map[string]any{"id": res.TenantID, "name": res.TenantName},
-			"owner_user": map[string]any{"id": res.UserID, "email": res.UserEmail},
+		Data: dto.BootstrapResponse{
+			Tenant:    dto.TenantSummary{ID: res.TenantID, Name: res.TenantName},
+			OwnerUser: dto.UserSummary{ID: res.UserID, Email: res.UserEmail},
 		},
 	})
 	return nil
 }
 
 func (h *Handler) Register(c *gin.Context) error {
-	var req struct {
-		Email    string `json:"email" binding:"required"`
-		Password string `json:"password" binding:"required"`
-	}
+	var req dto.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		return apperr.BadRequest(err)
 	}
@@ -121,18 +106,15 @@ func (h *Handler) Register(c *gin.Context) error {
 		RequestID: c.GetString("request_id"),
 		Code:      0,
 		Message:   "ok",
-		Data: map[string]any{
-			"user": map[string]any{"id": user.ID, "email": user.Email},
+		Data: dto.RegisterResponse{
+			User: dto.UserSummary{ID: user.ID, Email: user.Email},
 		},
 	})
 	return nil
 }
 
 func (h *Handler) Login(c *gin.Context) error {
-	var req struct {
-		Email    string `json:"email" binding:"required"`
-		Password string `json:"password" binding:"required"`
-	}
+	var req dto.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		return apperr.BadRequest(err)
 	}
@@ -177,20 +159,18 @@ func (h *Handler) Login(c *gin.Context) error {
 		_ = h.Redis.Del(c, key).Err()
 	}
 
-	resp.OK(c, map[string]any{
-		"access_token":       at,
-		"expires_in":         int(h.AccessTTL.Round(time.Second).Seconds()),
-		"refresh_token":      rt,
-		"refresh_expires_in": int(h.RefreshTTL.Round(time.Second).Seconds()),
-		"user":               map[string]any{"id": user.ID, "email": user.Email},
+	resp.OK(c, dto.LoginResponse{
+		AccessToken:      at,
+		ExpiresIn:        int(h.AccessTTL.Round(time.Second).Seconds()),
+		RefreshToken:     rt,
+		RefreshExpiresIn: int(h.RefreshTTL.Round(time.Second).Seconds()),
+		User:             dto.UserSummary{ID: user.ID, Email: user.Email},
 	})
 	return nil
 }
 
 func (h *Handler) Refresh(c *gin.Context) error {
-	var req struct {
-		RefreshToken string `json:"refresh_token" binding:"required"`
-	}
+	var req dto.RefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		return apperr.BadRequest(err)
 	}
@@ -215,26 +195,24 @@ func (h *Handler) Refresh(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
-	resp.OK(c, map[string]any{
-		"access_token":       at,
-		"expires_in":         int(h.AccessTTL.Round(time.Second).Seconds()),
-		"refresh_token":      newRT,
-		"refresh_expires_in": int(h.RefreshTTL.Round(time.Second).Seconds()),
+	resp.OK(c, dto.RefreshResponse{
+		AccessToken:      at,
+		ExpiresIn:        int(h.AccessTTL.Round(time.Second).Seconds()),
+		RefreshToken:     newRT,
+		RefreshExpiresIn: int(h.RefreshTTL.Round(time.Second).Seconds()),
 	})
 	return nil
 }
 
 func (h *Handler) Logout(c *gin.Context) error {
-	var req struct {
-		RefreshToken string `json:"refresh_token" binding:"required"`
-	}
+	var req dto.LogoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		return apperr.BadRequest(err)
 	}
 	if err := h.Store.RevokeRefreshToken(c, req.RefreshToken); err != nil {
 		return err
 	}
-	resp.OK(c, map[string]any{"ok": true})
+	resp.OK(c, dto.LogoutResponse{OK: true})
 	return nil
 }
 
@@ -247,7 +225,7 @@ func (h *Handler) LogoutAll(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
-	resp.OK(c, map[string]any{"ok": true, "revoked_count": revokedCount})
+	resp.OK(c, dto.LogoutAllResponse{OK: true, RevokedCount: revokedCount})
 	return nil
 }
 
