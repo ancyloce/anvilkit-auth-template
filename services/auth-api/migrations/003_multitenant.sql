@@ -3,7 +3,7 @@
 create table if not exists tenants (
   id text primary key,
   name text not null,
-  slug text unique,
+  slug text,
   status smallint not null default 1,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
