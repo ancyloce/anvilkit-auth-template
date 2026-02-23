@@ -129,8 +129,14 @@ func (h *Handler) AddMember(c *gin.Context) error {
 
 	if err = h.Store.AddMember(c, tid, req.UserID, req.Role); err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return apperr.Conflict(err).WithData(map[string]any{"reason": "member_exists"})
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == "23505" {
+				return apperr.Conflict(err).WithData(map[string]any{"reason": "member_exists"})
+			}
+			if pgErr.Code == "23503" {
+				// Foreign key violation: referenced user no longer exists.
+				return apperr.NotFound(errors.New("user_not_found")).WithData(map[string]any{"reason": "user_not_found"})
+			}
 		}
 		return err
 	}
