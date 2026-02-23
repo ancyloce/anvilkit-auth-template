@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	goredis "github.com/redis/go-redis/v9"
 
@@ -191,7 +192,7 @@ func (h *Handler) Refresh(c *gin.Context) error {
 		}
 		return err
 	}
-	at, err := ajwt.Sign(h.JWTSecret, h.JWTIssuer, h.JWTAudience, uid, "", "access", h.AccessTTL)
+	at, err := ajwt.SignAccessToken(h.JWTSecret, h.JWTIssuer, h.JWTAudience, uid, nil, h.AccessTTL)
 	if err != nil {
 		return err
 	}
@@ -229,8 +230,45 @@ func (h *Handler) LogoutAll(c *gin.Context) error {
 	return nil
 }
 
+func (h *Handler) SwitchTenant(c *gin.Context) error {
+	uid := strings.TrimSpace(c.GetString("uid"))
+	if uid == "" {
+		return apperr.Unauthorized(errors.New("invalid_access_token")).WithData(map[string]any{"reason": "invalid_access_token"})
+	}
+
+	var req dto.SwitchTenantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		return apperr.BadRequest(err)
+	}
+	tenantID := strings.TrimSpace(req.TenantID)
+	if tenantID == "" {
+		return apperr.BadRequest(errors.New("tenant_id_required"))
+	}
+	if _, err := uuid.Parse(tenantID); err != nil {
+		return apperr.BadRequest(errors.New("invalid_tenant_id"))
+	}
+
+	if err := h.Store.EnsureUserInTenant(c, uid, tenantID); err != nil {
+		if errors.Is(err, store.ErrNotInTenant) {
+			return apperr.Forbidden(err).WithData(map[string]any{"reason": "not_in_tenant"})
+		}
+		return err
+	}
+
+	at, err := ajwt.SignAccessToken(h.JWTSecret, h.JWTIssuer, h.JWTAudience, uid, &tenantID, h.AccessTTL)
+	if err != nil {
+		return err
+	}
+	resp.OK(c, dto.SwitchTenantResponse{AccessToken: at, ExpiresIn: int(h.AccessTTL.Round(time.Second).Seconds())})
+	return nil
+}
+
 func (h *Handler) issueTokens(ctx context.Context, uid, tid, userAgent, ip string) (string, string, error) {
-	at, err := ajwt.Sign(h.JWTSecret, h.JWTIssuer, h.JWTAudience, uid, tid, "access", h.AccessTTL)
+	var tenantID *string
+	if strings.TrimSpace(tid) != "" {
+		tenantID = &tid
+	}
+	at, err := ajwt.SignAccessToken(h.JWTSecret, h.JWTIssuer, h.JWTAudience, uid, tenantID, h.AccessTTL)
 	if err != nil {
 		return "", "", err
 	}

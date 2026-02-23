@@ -32,6 +32,14 @@ func Sign(secret, issuer, audience, uid, tid, typ string, ttl time.Duration) (st
 	return token.SignedString([]byte(secret))
 }
 
+func SignAccessToken(secret, issuer, audience, uid string, tid *string, ttl time.Duration) (string, error) {
+	tenantID := ""
+	if tid != nil {
+		tenantID = *tid
+	}
+	return Sign(secret, issuer, audience, uid, tenantID, "access", ttl)
+}
+
 func Parse(secret, issuer, audience, tokenStr string) (*Claims, error) {
 	t, err := jwtv5.ParseWithClaims(tokenStr, &Claims{}, func(token *jwtv5.Token) (any, error) {
 		if token.Method != jwtv5.SigningMethodHS256 {
