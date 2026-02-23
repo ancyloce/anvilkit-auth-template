@@ -110,7 +110,7 @@ func (h *Handler) AddMember(c *gin.Context) error {
 
 	var req addMemberReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return apperr.BadRequest(err).WithData(map[string]any{"reason": "invalid_argument"})
+		return apperr.BadRequest(err)
 	}
 	if err := validateUserID(req.UserID); err != nil {
 		return err
