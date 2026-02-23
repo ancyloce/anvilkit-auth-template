@@ -17,15 +17,18 @@ import (
 type Store struct{ DB *pgxpool.Pool }
 
 var (
-	ErrRefreshSessionNotFound = errors.New("refresh_session_not_found")
-	ErrRefreshExpired         = errors.New("refresh_expired")
-	ErrRefreshSessionRevoked  = errors.New("session_revoked")
+	ErrRefreshSessionNotFound    = errors.New("refresh_session_not_found")
+	ErrRefreshExpired            = errors.New("refresh_expired")
+	ErrRefreshSessionRevoked     = errors.New("session_revoked")
+	ErrBootstrapPasswordMismatch = errors.New("bootstrap_password_mismatch")
+	ErrTenantNameConflict        = errors.New("tenant_name_conflict")
 )
 
 type BootstrapResult struct {
-	UserID   string
-	TenantID string
-	Email    string
+	UserID     string
+	UserEmail  string
+	TenantID   string
+	TenantName string
 }
 
 type RegisteredUser struct {
@@ -103,8 +106,16 @@ where u.email=$1`, email).Scan(&uid, &pwdHash)
 		}
 	} else {
 		if pwdHash == nil || crypto.VerifyPassword(*pwdHash, password) != nil {
-			return nil, errors.New("invalid_password")
+			return nil, ErrBootstrapPasswordMismatch
 		}
+	}
+
+	var tenantExists bool
+	if err = tx.QueryRow(ctx, `select exists(select 1 from tenants where name=$1)`, tenantName).Scan(&tenantExists); err != nil {
+		return nil, err
+	}
+	if tenantExists {
+		return nil, ErrTenantNameConflict
 	}
 
 	tid := uuid.NewString()
@@ -114,13 +125,10 @@ where u.email=$1`, email).Scan(&uid, &pwdHash)
 	if _, err = tx.Exec(ctx, `insert into tenant_users(tenant_id,user_id,role,created_at) values($1,$2,'owner',now())`, tid, uid); err != nil {
 		return nil, err
 	}
-	if _, err = tx.Exec(ctx, `insert into user_roles(tenant_id,user_id,role,created_at) values($1,$2,'tenant_admin',now())`, tid, uid); err != nil {
-		return nil, err
-	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return &BootstrapResult{UserID: uid, TenantID: tid, Email: email}, nil
+	return &BootstrapResult{UserID: uid, UserEmail: email, TenantID: tid, TenantName: tenantName}, nil
 }
 
 func (s *Store) GetLoginUserByEmail(ctx context.Context, email string) (*LoginUser, error) {

@@ -1,11 +1,11 @@
 ### bootstrap
-POST http://localhost:8080/api/v1/auth/bootstrap
+POST http://localhost:8080/v1/bootstrap
 Content-Type: application/json
 
 {
-  "email": "demo@example.com",
-  "password": "passw0rd!",
-  "tenant_name": "demo-tenant"
+  "tenant_name": "demo-tenant",
+  "owner_email": "demo@example.com",
+  "owner_password": "Passw0rd!"
 }
 
 ### login
@@ -14,7 +14,7 @@ Content-Type: application/json
 
 {
   "email": "demo@example.com",
-  "password": "passw0rd!",
+  "password": "Passw0rd!",
   "tenant_id": "{{tenant_id}}"
 }
 

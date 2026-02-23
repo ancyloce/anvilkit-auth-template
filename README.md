@@ -27,6 +27,22 @@ make smoke   # verify everything is working
 
 See `docs/` for architecture and API details.
 
+## Bootstrap API
+
+Bootstrap is implemented in **auth-api** as `POST /v1/bootstrap` (outside `/v1/auth`).
+
+Request body:
+
+```json
+{
+  "tenant_name": "Acme",
+  "owner_email": "owner@example.com",
+  "owner_password": "Passw0rd!"
+}
+```
+
+Response `data` returns `tenant` and `owner_user` in unified Envelope format.
+
 ## Configuration
 
 `auth-api` loads config from environment variables on startup. Missing required variables cause an immediate exit (no sensitive values are logged).

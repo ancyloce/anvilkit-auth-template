@@ -16,7 +16,7 @@ Error envelope uses non-zero code and stable message.
 ## auth-api
 
 - GET `/healthz`
-- POST `/api/v1/auth/bootstrap`
+- POST `/v1/bootstrap`
 - POST `/api/v1/auth/register`
 - POST `/api/v1/auth/login`
 - POST `/api/v1/auth/refresh`
