@@ -28,7 +28,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	h := &handler.Handler{Store: &store.Store{DB: db}, Enforcer: e}
+	st := &store.Store{DB: db}
+	h := &handler.Handler{Store: st, Enforcer: e}
 	secret := cfg.GetString("JWT_SECRET", "dev-secret-change-me")
 	issuer := cfg.GetString("JWT_ISSUER", "anvilkit-auth")
 	audience := cfg.GetString("JWT_AUDIENCE", "anvilkit-clients")
@@ -43,9 +44,13 @@ func main() {
 	r.NoRoute(handler.NotFound)
 	r.GET("/healthz", ginmid.Wrap(h.Healthz))
 
-	admin := r.Group("/api/v1/admin", ginmid.AuthN(secret, issuer, audience), handler.MustTenantMatch())
+	admin := r.Group("/api/v1/admin", ginmid.AuthN(secret, issuer, audience), handler.MustTenantMatch(st))
 	admin.GET("/tenants/:tenantId/me/roles", ginmid.Wrap(h.MeRoles))
 	admin.POST("/tenants/:tenantId/users/:userId/roles/:role", ginmid.Wrap(h.AssignRole))
+	admin.GET("/tenants/:tenantId/members", ginmid.Wrap(h.ListMembers))
+	admin.POST("/tenants/:tenantId/members", ginmid.Wrap(h.AddMember))
+	admin.PATCH("/tenants/:tenantId/members/:uid", ginmid.Wrap(h.UpdateMemberRole))
+	admin.DELETE("/tenants/:tenantId/members/:uid", ginmid.Wrap(h.RemoveMember))
 
 	if err := r.Run(":8081"); err != nil {
 		log.Fatal(err)
