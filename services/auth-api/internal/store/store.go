@@ -22,6 +22,7 @@ var (
 	ErrRefreshSessionRevoked     = errors.New("session_revoked")
 	ErrBootstrapPasswordMismatch = errors.New("bootstrap_password_mismatch")
 	ErrTenantNameConflict        = errors.New("tenant_name_conflict")
+	ErrNotInTenant               = errors.New("not_in_tenant")
 )
 
 type BootstrapResult struct {
@@ -228,4 +229,15 @@ func (s *Store) RevokeAllRefreshTokensByUser(ctx context.Context, userID string)
 		return 0, err
 	}
 	return ct.RowsAffected(), nil
+}
+
+func (s *Store) EnsureUserInTenant(ctx context.Context, userID, tenantID string) error {
+	var exists bool
+	if err := s.DB.QueryRow(ctx, `select exists(select 1 from tenant_users where tenant_id=$1 and user_id=$2)`, tenantID, userID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotInTenant
+	}
+	return nil
 }

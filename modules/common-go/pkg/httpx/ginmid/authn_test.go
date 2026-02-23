@@ -114,7 +114,7 @@ func TestAuthN_UnauthorizedScenarios(t *testing.T) {
 	}
 }
 
-func TestAuthN_SuccessSetsUIDInContext(t *testing.T) {
+func TestAuthN_SuccessSetsUIDAndTIDInContext(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	token, err := ajwt.Sign(testJWTSecret, testJWTIssuer, testJWTAudience, "uid-ok", "tenant-ok", "access", time.Minute)
@@ -137,6 +137,7 @@ func TestAuthN_SuccessSetsUIDInContext(t *testing.T) {
 		Code int `json:"code"`
 		Data struct {
 			UID string `json:"uid"`
+			TID string `json:"tid"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
@@ -147,6 +148,43 @@ func TestAuthN_SuccessSetsUIDInContext(t *testing.T) {
 	}
 	if body.Data.UID != "uid-ok" {
 		t.Fatalf("uid=%q want=uid-ok", body.Data.UID)
+	}
+	if body.Data.TID != "tenant-ok" {
+		t.Fatalf("tid=%q want=tenant-ok", body.Data.TID)
+	}
+}
+
+func TestAuthN_SuccessWithoutTIDDoesNotPanic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	token, err := ajwt.Sign(testJWTSecret, testJWTIssuer, testJWTAudience, "uid-ok", "", "access", time.Minute)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	r := newAuthNTestRouter(t)
+	req, _ := http.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var body struct {
+		Code int `json:"code"`
+		Data struct {
+			UID string `json:"uid"`
+			TID string `json:"tid"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Data.TID != "" {
+		t.Fatalf("tid=%q want empty", body.Data.TID)
 	}
 }
 
@@ -159,7 +197,8 @@ func newAuthNTestRouter(t *testing.T) *gin.Engine {
 		if !ok {
 			t.Fatalf("uid should exist in context")
 		}
-		resp.OK(c, map[string]any{"uid": uid})
+		tid := c.GetString("tid")
+		resp.OK(c, map[string]any{"uid": uid, "tid": tid})
 	})
 	return r
 }

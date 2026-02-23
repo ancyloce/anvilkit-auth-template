@@ -80,3 +80,14 @@ type TenantSummary struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
+
+// Switch tenant
+
+type SwitchTenantRequest struct {
+	TenantID string `json:"tenant_id" binding:"required"`
+}
+
+type SwitchTenantResponse struct {
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
+}

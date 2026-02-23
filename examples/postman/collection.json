@@ -178,6 +178,50 @@
       ]
     },
     {
+      "name": "switch_tenant",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{access_token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"tenant_id\": \"{{tenant_id}}\"}"
+        },
+        "url": {
+          "raw": "{{base_url_auth}}/v1/auth/switch_tenant",
+          "host": [
+            "{{base_url_auth}}"
+          ],
+          "path": [
+            "v1",
+            "auth",
+            "switch_tenant"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('access_token', json.data.access_token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "admin me roles",
       "request": {
         "method": "GET",
