@@ -10,7 +10,6 @@ import (
 
 	"github.com/casbin/casbin/v2"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
@@ -214,9 +213,6 @@ func validateUserID(id string) error {
 	}
 	return nil
 }
-
-func (h *Handler) enforce(c *gin.Context, roles []string, tid string) error {
-	dom := fmt.Sprintf("tenant:%s", tid)
 
 func (h *Handler) enforce(c *gin.Context, roles []string, tid string) error {
 	dom := fmt.Sprintf("tenant:%s", tid)
