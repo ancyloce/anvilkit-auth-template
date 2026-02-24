@@ -212,11 +212,11 @@ func validateUserID(id string) error {
 	if strings.TrimSpace(id) == "" {
 		return apperr.BadRequest(errors.New("missing_user_id")).WithData(map[string]any{"reason": "invalid_argument"})
 	}
-	if _, err := uuid.Parse(id); err != nil {
-		return apperr.BadRequest(err).WithData(map[string]any{"reason": "invalid_argument"})
-	}
 	return nil
 }
+
+func (h *Handler) enforce(c *gin.Context, roles []string, tid string) error {
+	dom := fmt.Sprintf("tenant:%s", tid)
 
 func (h *Handler) enforce(c *gin.Context, roles []string, tid string) error {
 	dom := fmt.Sprintf("tenant:%s", tid)
