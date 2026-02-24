@@ -108,7 +108,10 @@ func performJSON(r http.Handler, method, path, token string, body any) *httptest
 	if body == nil {
 		reader = bytes.NewReader(nil)
 	} else {
-		b, _ := json.Marshal(body)
+		b, err := json.Marshal(body)
+		if err != nil {
+			panic(err)
+		}
 		reader = bytes.NewReader(b)
 	}
 	req := httptest.NewRequest(method, path, reader)
