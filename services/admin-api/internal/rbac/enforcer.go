@@ -7,8 +7,8 @@ import (
 	"github.com/casbin/casbin/v2"
 )
 
-func NewEnforcer(dbDSN, modelPath string) (*casbin.Enforcer, error) {
-	adapter, err := NewPostgresAdapter(context.Background(), dbDSN)
+func NewEnforcer(ctx context.Context, dbDSN, modelPath string) (*casbin.Enforcer, error) {
+	adapter, err := NewPostgresAdapter(ctx, dbDSN)
 	if err != nil {
 		return nil, fmt.Errorf("init casbin postgres adapter: %w", err)
 	}
