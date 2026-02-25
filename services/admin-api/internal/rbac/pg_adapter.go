@@ -29,6 +29,12 @@ func NewPostgresAdapter(ctx context.Context, dsn string) (*PostgresAdapter, erro
 	return &PostgresAdapter{db: db}, nil
 }
 
+func (a *PostgresAdapter) Close() {
+	if a == nil || a.db == nil {
+		return
+	}
+	a.db.Close()
+}
 func (a *PostgresAdapter) LoadPolicy(model casbinmodel.Model) error {
 	rows, err := a.db.Query(context.Background(), `SELECT ptype, v0, v1, v2, v3, v4, v5 FROM casbin_rule ORDER BY id`)
 	if err != nil {
