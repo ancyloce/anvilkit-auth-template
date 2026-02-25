@@ -147,7 +147,7 @@ echo "  project_name: $COMPOSE_PROJECT_NAME"
 echo "MIGRATIONS_DIR=$MIGRATIONS_DIR"
 ls -la "$MIGRATIONS_DIR"
 
-if ! compgen -G "$MIGRATIONS_DIR/*.sql" >/dev/null; then
+if ! find "$MIGRATIONS_DIR" -maxdepth 2 -type f -name '*.sql' | grep -q .; then
   echo "no SQL migrations found under $MIGRATIONS_DIR" >&2
   exit 1
 fi
