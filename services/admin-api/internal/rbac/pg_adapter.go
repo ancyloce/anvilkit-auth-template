@@ -13,10 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// PostgresAdapter implements the Casbin persist.Adapter interface using PostgreSQL.
 type PostgresAdapter struct {
 	db *pgxpool.Pool
 }
 
+// NewPostgresAdapter creates a new PostgreSQL adapter for Casbin using the provided DSN.
 func NewPostgresAdapter(ctx context.Context, dsn string) (*PostgresAdapter, error) {
 	db, err := pgxpool.New(ctx, dsn)
 	if err != nil {
