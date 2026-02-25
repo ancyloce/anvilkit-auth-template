@@ -185,8 +185,14 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           cp .env.example .env
-          export MIGRATIONS_DIR="$PWD/migrations"
+          tmp_migrations_dir="$PWD/.ci/migrations"
+          rm -rf "$tmp_migrations_dir"
+          mkdir -p "$tmp_migrations_dir/auth-api" "$tmp_migrations_dir/admin-api"
+          cp services/auth-api/migrations/*.sql "$tmp_migrations_dir/auth-api/"
+          cp services/admin-api/migrations/*.sql "$tmp_migrations_dir/admin-api/"
+          export MIGRATIONS_DIR="$tmp_migrations_dir"
           docker compose --project-directory . --env-file .env -f deploy/docker-compose.prod.yml config > /dev/null
+          rm -rf "$tmp_migrations_dir"
           rm -f .env
 
       - name: Build and push auth-api image
