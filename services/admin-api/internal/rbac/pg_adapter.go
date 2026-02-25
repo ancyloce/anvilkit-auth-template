@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	casbinmodel "github.com/casbin/casbin/v2/model"
@@ -70,7 +71,7 @@ func (a *PostgresAdapter) SavePolicy(model casbinmodel.Model) error {
 	defer func() {
 		rollbackErr := tx.Rollback(context.Background())
 		if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			// rollback best effort: keep original return path unchanged.
+			log.Printf("rbac: tx rollback failed: %v", rollbackErr)
 		}
 	}()
 
