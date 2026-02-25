@@ -79,7 +79,7 @@ func (a *PostgresAdapter) SavePolicy(model casbinmodel.Model) error {
 	defer func() {
 		rollbackErr := tx.Rollback(context.Background())
 		if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			log.Printf("rbac: tx rollback failed: %v", rollbackErr)
+			log.Printf("rbac casbin postgres adapter: tx rollback failed in SavePolicy: %v", rollbackErr)
 		}
 	}()
 
