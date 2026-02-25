@@ -72,37 +72,45 @@ func (a *PostgresAdapter) LoadPolicy(model casbinmodel.Model) error {
 }
 
 func (a *PostgresAdapter) SavePolicy(model casbinmodel.Model) error {
-	tx, err := a.db.Begin(context.Background())
+	ctx := context.Background()
+	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
+	committed := false
 	defer func() {
-		rollbackErr := tx.Rollback(context.Background())
-		if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			log.Printf("rbac casbin postgres adapter: tx rollback failed in SavePolicy: %v", rollbackErr)
+		if !committed {
+			rollbackErr := tx.Rollback(ctx)
+			if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+				log.Printf("rbac: tx rollback failed: %v", rollbackErr)
+			}
 		}
 	}()
 
-	if _, err = tx.Exec(context.Background(), `TRUNCATE TABLE casbin_rule RESTART IDENTITY`); err != nil {
+	if _, err = tx.Exec(ctx, `TRUNCATE TABLE casbin_rule RESTART IDENTITY`); err != nil {
 		return err
 	}
 
 	for ptype, ast := range model["p"] {
 		for _, rule := range ast.Policy {
-			if err = insertRule(context.Background(), tx, ptype, rule); err != nil {
+			if err = insertRule(ctx, tx, ptype, rule); err != nil {
 				return err
 			}
 		}
 	}
 	for ptype, ast := range model["g"] {
 		for _, rule := range ast.Policy {
-			if err = insertRule(context.Background(), tx, ptype, rule); err != nil {
+			if err = insertRule(ctx, tx, ptype, rule); err != nil {
 				return err
 			}
 		}
 	}
 
-	return tx.Commit(context.Background())
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (a *PostgresAdapter) AddPolicy(_ string, ptype string, rule []string) error {
