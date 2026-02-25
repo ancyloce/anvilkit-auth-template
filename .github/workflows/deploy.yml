@@ -360,7 +360,12 @@ jobs:
           set -euo pipefail
           port="${DEPLOY_PORT:-22}"
           ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
-            "mkdir -p '$DEPLOY_PATH/deploy' '$DEPLOY_PATH/scripts' '$DEPLOY_PATH/migrations/auth-api' '$DEPLOY_PATH/migrations/admin-api'"
+            "mkdir -p '$DEPLOY_PATH/deploy' '$DEPLOY_PATH/scripts'"
+
+          # Reset migrations directory to keep deploy idempotent and avoid stale/legacy files
+          # from previous releases causing count mismatches.
+          ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+            "rm -rf '$DEPLOY_PATH/migrations' && mkdir -p '$DEPLOY_PATH/migrations/auth-api' '$DEPLOY_PATH/migrations/admin-api'"
 
           scp -P "$port" -o StrictHostKeyChecking=accept-new deploy/docker-compose.prod.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/deploy/docker-compose.prod.yml"
@@ -384,12 +389,12 @@ jobs:
           if [[ "$remote_count" -ne "$local_count" ]]; then
             echo "::error::Migration file count mismatch: local=$local_count remote=$remote_count" >&2
             ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
-              "ls -la '$DEPLOY_PATH/migrations'" >&2
+              "ls -la '$DEPLOY_PATH/migrations'; ls -la '$DEPLOY_PATH/migrations/auth-api'; ls -la '$DEPLOY_PATH/migrations/admin-api'" >&2
             exit 1
           fi
           echo "Migrations uploaded: $remote_count file(s)"
           ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
-            "ls -la '$DEPLOY_PATH/migrations'"
+            "ls -la '$DEPLOY_PATH/migrations'; ls -la '$DEPLOY_PATH/migrations/auth-api'; ls -la '$DEPLOY_PATH/migrations/admin-api'"
 
       - name: Run remote deployment
         env:
