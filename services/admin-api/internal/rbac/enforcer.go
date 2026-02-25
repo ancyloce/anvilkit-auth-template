@@ -7,6 +7,8 @@ import (
 	"github.com/casbin/casbin/v2"
 )
 
+// NewEnforcer creates and initializes a Casbin enforcer with PostgreSQL persistence
+// using the provided database DSN and model configuration file path.
 func NewEnforcer(ctx context.Context, dbDSN, modelPath string) (*casbin.Enforcer, error) {
 	adapter, err := NewPostgresAdapter(ctx, dbDSN)
 	if err != nil {
