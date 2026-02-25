@@ -5,13 +5,13 @@ import (
 	"log"
 	"path/filepath"
 
-	"github.com/casbin/casbin/v2"
 	"github.com/gin-gonic/gin"
 
 	"anvilkit-auth-template/modules/common-go/pkg/cfg"
 	"anvilkit-auth-template/modules/common-go/pkg/db/pgsql"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
 	"anvilkit-auth-template/services/admin-api/internal/handler"
+	"anvilkit-auth-template/services/admin-api/internal/rbac"
 	"anvilkit-auth-template/services/admin-api/internal/store"
 )
 
@@ -23,7 +23,7 @@ func main() {
 	}
 
 	rbacDir := cfg.GetString("RBAC_DIR", "internal/rbac")
-	e, err := casbin.NewEnforcer(filepath.Join(rbacDir, "model.conf"), filepath.Join(rbacDir, "policy.csv"))
+	e, err := rbac.NewEnforcer(cfg.GetString("DB_DSN", "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable"), filepath.Join(rbacDir, "model.conf"))
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -62,7 +62,7 @@ jobs:
 
       - name: Migrate database
         run: |
-          for file in $(find services/auth-api/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+          for file in $(find services/auth-api/migrations services/admin-api/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
             psql "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable" -v ON_ERROR_STOP=1 -f "$file"
           done
 
