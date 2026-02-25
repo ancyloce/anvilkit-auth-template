@@ -64,9 +64,12 @@ Response `data` returns `tenant` and `owner_user` in unified Envelope format.
 | `CORS_ALLOW_CREDENTIALS` | no | `false` | CORS credentials flag |
 | `RBAC_DIR` | no | `internal/rbac` | Casbin config directory (admin-api only) |
 
-## Database Migrations (auth-api)
+## Database Migrations
 
-`services/auth-api/migrations/*.sql` is applied in lexical order (001 → 002 → 003).
+Migrations are applied from both service directories in lexical order:
+
+- `services/auth-api/migrations/*.sql`
+- `services/admin-api/migrations/*.sql`
 
 ### Multi-tenant tables
 

@@ -92,7 +92,7 @@ jobs:
 
       - name: Migrate database
         run: |
-          for file in $(find services/auth-api/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+          for file in $(find services/auth-api/migrations services/admin-api/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
             psql "postgres://postgres:postgres@localhost:5432/auth?sslmode=disable" -v ON_ERROR_STOP=1 -f "$file"
           done
 
@@ -360,7 +360,7 @@ jobs:
           set -euo pipefail
           port="${DEPLOY_PORT:-22}"
           ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
-            "mkdir -p '$DEPLOY_PATH/deploy' '$DEPLOY_PATH/scripts' '$DEPLOY_PATH/migrations'"
+            "mkdir -p '$DEPLOY_PATH/deploy' '$DEPLOY_PATH/scripts' '$DEPLOY_PATH/migrations/auth-api' '$DEPLOY_PATH/migrations/admin-api'"
 
           scp -P "$port" -o StrictHostKeyChecking=accept-new deploy/docker-compose.prod.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/deploy/docker-compose.prod.yml"
@@ -369,16 +369,18 @@ jobs:
           scp -P "$port" -o StrictHostKeyChecking=accept-new scripts/remote_deploy.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/scripts/remote_deploy.sh"
 
-          # Stream all migrations as a tar archive and extract atomically on the remote.
-          # This avoids scp glob expansion issues and ensures every file arrives intact.
-          local_count=$(ls -1 services/auth-api/migrations/*.sql | wc -l)
+          # Stream all migrations as tar archives and extract by service to avoid filename collisions.
+          local_count=$(find services/auth-api/migrations services/admin-api/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)
           tar -C services/auth-api/migrations -cf - $(ls -1 services/auth-api/migrations/*.sql | sort | xargs -n1 basename) \
             | ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
-              "tar -C '$DEPLOY_PATH/migrations' -xf -"
+              "tar -C '$DEPLOY_PATH/migrations/auth-api' -xf -"
+          tar -C services/admin-api/migrations -cf - $(ls -1 services/admin-api/migrations/*.sql | sort | xargs -n1 basename) \
+            | ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+              "tar -C '$DEPLOY_PATH/migrations/admin-api' -xf -"
 
           # Verify remote count matches local count — no hardcoded filenames.
           remote_count=$(ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
-            "ls -1 '$DEPLOY_PATH/migrations'/*.sql 2>/dev/null | wc -l")
+            "find '$DEPLOY_PATH/migrations' -maxdepth 2 -type f -name '*.sql' | wc -l")
           if [[ "$remote_count" -ne "$local_count" ]]; then
             echo "::error::Migration file count mismatch: local=$local_count remote=$remote_count" >&2
             ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \

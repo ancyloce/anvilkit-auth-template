@@ -6,10 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +17,7 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
 	"anvilkit-auth-template/services/admin-api/internal/handler"
 	"anvilkit-auth-template/services/admin-api/internal/store"
+	"anvilkit-auth-template/services/admin-api/internal/testutil"
 )
 
 func TestMemberManagementEndpoints(t *testing.T) {
@@ -133,50 +130,12 @@ func mustAccessToken(t *testing.T, uid string, tid *string) string {
 
 func mustTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("TEST_DB_DSN"))
-	if dsn == "" {
-		t.Skip("TEST_DB_DSN not set")
-	}
-	db, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("db open: %v", err)
-	}
-	if err = db.Ping(context.Background()); err != nil {
-		t.Fatalf("db ping: %v", err)
-	}
-	applyMigrations(t, db)
-	t.Cleanup(func() { db.Close() })
-	return db
-}
-
-func applyMigrations(t *testing.T, db *pgxpool.Pool) {
-	t.Helper()
-	for _, m := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql"} {
-		sqlBytes, err := os.ReadFile(filepath.Join(migrationsDir(t), m))
-		if err != nil {
-			t.Fatalf("read migration %s: %v", m, err)
-		}
-		if _, err = db.Exec(context.Background(), string(sqlBytes)); err != nil {
-			t.Fatalf("apply migration %s: %v", m, err)
-		}
-	}
-}
-
-func migrationsDir(t *testing.T) string {
-	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "..", "auth-api", "migrations"))
+	return testutil.MustTestDB(t)
 }
 
 func truncateTables(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
-	_, err := db.Exec(context.Background(), `truncate table user_roles, tenant_users, refresh_tokens, refresh_sessions, user_password_credentials, tenants, users restart identity cascade`)
-	if err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
+	testutil.TruncateAuthTables(t, db)
 }
 
 func seed(t *testing.T, db *pgxpool.Pool, tenantID, ownerID, memberID, targetID, otherTenantID, otherOwnerID string) {
