@@ -39,6 +39,9 @@ func TestEnforcerWithPostgresAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rbac.NewEnforcer: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = enforcer.Close()
+	})
 
 	enforcer.EnableAutoSave(false)
 	addedPolicy, err := enforcer.AddPolicy("tenant_admin", "tenant:*", "/v1/admin/*", "GET")
