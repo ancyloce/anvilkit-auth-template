@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -54,7 +55,9 @@ func (a *PostgresAdapter) LoadPolicy(model casbinmodel.Model) error {
 		for i := 0; i <= last; i++ {
 			line += ", " + parts[i]
 		}
-		persist.LoadPolicyLine(line, model)
+		if err = persist.LoadPolicyLine(line, model); err != nil {
+			return fmt.Errorf("load policy line: %w", err)
+		}
 	}
 	return rows.Err()
 }
@@ -64,7 +67,12 @@ func (a *PostgresAdapter) SavePolicy(model casbinmodel.Model) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer func() {
+		rollbackErr := tx.Rollback(context.Background())
+		if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			// rollback best effort: keep original return path unchanged.
+		}
+	}()
 
 	if _, err = tx.Exec(context.Background(), `TRUNCATE TABLE casbin_rule RESTART IDENTITY`); err != nil {
 		return err
