@@ -45,15 +45,6 @@ func TestEnforcerWithPostgresAdapter(t *testing.T) {
 		t.Fatalf("rbac.NewEnforcer: %v", err)
 	}
 
-	enforcer.EnableAutoSave(false)
-	addedPolicy, err := enforcer.AddPolicy("tenant_admin", "tenant:*", "/v1/admin/*", "GET")
-	if err != nil {
-		t.Fatalf("AddPolicy: %v", err)
-	}
-	if !addedPolicy {
-		t.Fatalf("expected policy to be added")
-	}
-
 	addedGrouping, err := enforcer.AddGroupingPolicy("tenant_admin", "tenant_admin", "tenant:1")
 	if err != nil {
 		t.Fatalf("AddGroupingPolicy: %v", err)
@@ -85,6 +76,139 @@ func TestEnforcerWithPostgresAdapter(t *testing.T) {
 	}
 	if ok {
 		t.Fatalf("expected deny for member")
+	}
+}
+
+func TestSeedDefaultPolicyIdempotent(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_DB_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_DB_DSN not set")
+	}
+
+	db, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	lockConn := lockDB(t, db)
+	t.Cleanup(func() {
+		unlockDB(t, lockConn)
+		lockConn.Release()
+		db.Close()
+	})
+
+	testutil.ApplyMigrations(t, db)
+	if _, err = db.Exec(context.Background(), `TRUNCATE TABLE casbin_rule RESTART IDENTITY`); err != nil {
+		t.Fatalf("truncate casbin_rule: %v", err)
+	}
+
+	enforcer, err := rbac.NewEnforcer(dsn, modelPath(t))
+	if err != nil {
+		t.Fatalf("rbac.NewEnforcer: %v", err)
+	}
+
+	before, err := enforcer.GetPolicy()
+	if err != nil {
+		t.Fatalf("GetPolicy before: %v", err)
+	}
+
+	changed, err := rbac.SeedDefaultPolicy(enforcer)
+	if err != nil {
+		t.Fatalf("SeedDefaultPolicy second call: %v", err)
+	}
+	if changed {
+		t.Fatalf("expected no change on second seed")
+	}
+
+	after, err := enforcer.GetPolicy()
+	if err != nil {
+		t.Fatalf("GetPolicy after: %v", err)
+	}
+	if len(before) != len(after) {
+		t.Fatalf("policy count changed on idempotent seed: before=%d after=%d", len(before), len(after))
+	}
+}
+
+func TestDefaultPolicyEnforce(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_DB_DSN"))
+	if dsn == "" {
+		t.Skip("TEST_DB_DSN not set")
+	}
+
+	db, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	lockConn := lockDB(t, db)
+	t.Cleanup(func() {
+		unlockDB(t, lockConn)
+		lockConn.Release()
+		db.Close()
+	})
+
+	testutil.ApplyMigrations(t, db)
+	if _, err = db.Exec(context.Background(), `TRUNCATE TABLE casbin_rule RESTART IDENTITY`); err != nil {
+		t.Fatalf("truncate casbin_rule: %v", err)
+	}
+
+	enforcer, err := rbac.NewEnforcer(dsn, modelPath(t))
+	if err != nil {
+		t.Fatalf("rbac.NewEnforcer: %v", err)
+	}
+
+	ownerAllowed, err := enforcer.Enforce("tenant_owner", "tenant:1", "/v1/admin/tenants/1/members", "GET")
+	if err != nil {
+		t.Fatalf("Enforce owner: %v", err)
+	}
+	if !ownerAllowed {
+		t.Fatalf("expected tenant_owner to be allowed")
+	}
+
+	adminAllowed, err := enforcer.Enforce("tenant_admin", "tenant:1", "/v1/admin/tenants/1/members", "POST")
+	if err != nil {
+		t.Fatalf("Enforce admin: %v", err)
+	}
+	if !adminAllowed {
+		t.Fatalf("expected tenant_admin to be allowed")
+	}
+
+	memberAllowed, err := enforcer.Enforce("member", "tenant:1", "/v1/admin/tenants/1/members", "GET")
+	if err != nil {
+		t.Fatalf("Enforce member: %v", err)
+	}
+	if memberAllowed {
+		t.Fatalf("expected member to be denied")
+	}
+}
+
+func TestMapTenantRoleToCasbin(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{name: "owner", in: "owner", want: "tenant_owner"},
+		{name: "admin", in: "admin", want: "tenant_admin"},
+		{name: "member", in: "member", want: "member"},
+		{name: "invalid", in: "invalid_role", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := rbac.MapTenantRoleToCasbin(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("MapTenantRoleToCasbin: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("want %s got %s", tt.want, got)
+			}
+		})
 	}
 }
 

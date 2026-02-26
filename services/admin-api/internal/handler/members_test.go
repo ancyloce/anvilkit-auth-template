@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
 	"anvilkit-auth-template/services/admin-api/internal/handler"
+	"anvilkit-auth-template/services/admin-api/internal/rbac"
 	"anvilkit-auth-template/services/admin-api/internal/store"
 	"anvilkit-auth-template/services/admin-api/internal/testutil"
 )
@@ -33,7 +37,7 @@ func TestMemberManagementEndpoints(t *testing.T) {
 
 	seed(t, db, tenantID, ownerID, memberID, targetID, otherTenantID, otherOwnerID)
 
-	r := newTestRouter(db)
+	r := newTestRouter(t, db)
 
 	ownerToken := mustAccessToken(t, ownerID, &tenantID)
 	memberToken := mustAccessToken(t, memberID, &tenantID)
@@ -87,9 +91,14 @@ func TestMemberManagementEndpoints(t *testing.T) {
 	})
 }
 
-func newTestRouter(db *pgxpool.Pool) *gin.Engine {
+func newTestRouter(t *testing.T, db *pgxpool.Pool) *gin.Engine {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
-	h := &handler.Handler{Store: &store.Store{DB: db}}
+	enforcer, err := rbac.NewEnforcer(os.Getenv("TEST_DB_DSN"), modelPath())
+	if err != nil {
+		t.Fatalf("rbac.NewEnforcer: %v", err)
+	}
+	h := &handler.Handler{Store: &store.Store{DB: db}, Enforcer: enforcer}
 	r := gin.New()
 	r.Use(ginmid.ErrorHandler())
 	admin := r.Group("/api/v1/admin", ginmid.AuthN("test-secret-only", "anvilkit-auth", "anvilkit-clients"), handler.MustTenantMatch(h.Store))
@@ -136,6 +145,15 @@ func mustTestDB(t *testing.T) *pgxpool.Pool {
 func truncateTables(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
 	testutil.TruncateAuthTables(t, db)
+	if _, err := db.Exec(context.Background(), `TRUNCATE TABLE casbin_rule RESTART IDENTITY`); err != nil {
+		t.Fatalf("truncate casbin_rule: %v", err)
+	}
+}
+
+func modelPath() string {
+	_, filename, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "..", ".."))
+	return filepath.Join(root, "services", "admin-api", "internal", "rbac", "model.conf")
 }
 
 func seed(t *testing.T, db *pgxpool.Pool, tenantID, ownerID, memberID, targetID, otherTenantID, otherOwnerID string) {

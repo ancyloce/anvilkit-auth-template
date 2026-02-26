@@ -19,5 +19,8 @@ func NewEnforcer(dbDSN, modelPath string) (*casbin.Enforcer, error) {
 	if err = enforcer.LoadPolicy(); err != nil {
 		return nil, fmt.Errorf("load casbin policy: %w", err)
 	}
+	if _, err = SeedDefaultPolicy(enforcer); err != nil {
+		return nil, fmt.Errorf("seed default casbin policy: %w", err)
+	}
 	return enforcer, nil
 }
