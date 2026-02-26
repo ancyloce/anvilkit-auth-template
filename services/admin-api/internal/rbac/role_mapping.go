@@ -8,6 +8,9 @@ const (
 	TenantRoleMember = "member"
 )
 
+// MapTenantRoleToCasbin maps tenant role names ("owner", "admin", "member")
+// to their corresponding Casbin role identifiers. It returns an error if the
+// provided role name does not match a supported tenant role.
 func MapTenantRoleToCasbin(role string) (string, error) {
 	switch role {
 	case "owner":
