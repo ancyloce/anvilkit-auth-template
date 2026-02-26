@@ -3,8 +3,11 @@ package rbac
 import "fmt"
 
 const (
-	TenantRoleOwner  = "tenant_owner"
-	TenantRoleAdmin  = "tenant_admin"
+	// TenantRoleOwner is the Casbin role identifier used in RBAC policies for a tenant owner.
+	TenantRoleOwner = "tenant_owner"
+	// TenantRoleAdmin is the Casbin role identifier used in RBAC policies for a tenant administrator.
+	TenantRoleAdmin = "tenant_admin"
+	// TenantRoleMember is the Casbin role identifier used in RBAC policies for a tenant member.
 	TenantRoleMember = "member"
 )
 
