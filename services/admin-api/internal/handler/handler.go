@@ -15,10 +15,10 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
+	"anvilkit-auth-template/services/admin-api/internal/rbac"
 	"anvilkit-auth-template/services/admin-api/internal/store"
 )
 
-var manageRoles = []string{"owner", "admin"}
 var allowedMemberRoles = []string{"owner", "admin", "member"}
 
 type Handler struct {
@@ -188,14 +188,33 @@ func (h *Handler) RemoveMember(c *gin.Context) error {
 }
 
 func (h *Handler) requireTenantManager(c *gin.Context, tid string) error {
+	if h.Enforcer == nil {
+		return apperr.Forbidden(errors.New("rbac_forbidden")).WithData(map[string]any{"reason": "rbac_forbidden", "code": errcode.Forbidden})
+	}
 	uidAny, _ := c.Get("uid")
 	uid, _ := uidAny.(string)
-	role, exists, err := h.Store.TenantUserRole(c, tid, uid)
+	tenantRole, exists, err := h.Store.TenantUserRole(c, tid, uid)
 	if err != nil {
 		return err
 	}
-	if !exists || !slices.Contains(manageRoles, role) {
+	if !exists {
 		return apperr.Forbidden(errors.New("insufficient_role")).WithData(map[string]any{"reason": "insufficient_role", "code": errcode.Forbidden})
+	}
+
+	casbinRole, err := rbac.MapTenantRoleToCasbin(tenantRole)
+	if err != nil {
+		return apperr.Forbidden(errors.New("insufficient_role")).WithData(map[string]any{"reason": "insufficient_role", "code": errcode.Forbidden})
+	}
+
+	dom := fmt.Sprintf("tenant:%s", tid)
+	obj := c.FullPath()
+	act := c.Request.Method
+	ok, err := h.Enforcer.Enforce(casbinRole, dom, obj, act)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return apperr.Forbidden(errors.New("rbac_forbidden")).WithData(map[string]any{"reason": "rbac_forbidden", "code": errcode.Forbidden})
 	}
 	return nil
 }
