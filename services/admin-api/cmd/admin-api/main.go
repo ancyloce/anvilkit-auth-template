@@ -44,7 +44,7 @@ func main() {
 	r.NoRoute(handler.NotFound)
 	r.GET("/healthz", ginmid.Wrap(h.Healthz))
 
-	admin := r.Group("/api/v1/admin", ginmid.AuthN(secret, issuer, audience), handler.MustTenantMatch(st))
+	admin := r.Group("/api/v1/admin", ginmid.AuthN(secret, issuer, audience), handler.AdminRBAC(st, e))
 	admin.GET("/tenants/:tenantId/me/roles", ginmid.Wrap(h.MeRoles))
 	admin.POST("/tenants/:tenantId/users/:userId/roles/:role", ginmid.Wrap(h.AssignRole))
 	admin.GET("/tenants/:tenantId/members", ginmid.Wrap(h.ListMembers))
