@@ -106,25 +106,45 @@ func TestSeedDefaultPolicyIdempotent(t *testing.T) {
 		t.Fatalf("rbac.NewEnforcer: %v", err)
 	}
 
-	before, err := enforcer.GetPolicy()
-	if err != nil {
-		t.Fatalf("GetPolicy before: %v", err)
+	var beforeRows int
+	if err = db.QueryRow(context.Background(), `select count(*) from casbin_rule`).Scan(&beforeRows); err != nil {
+		t.Fatalf("count casbin_rule before: %v", err)
+	}
+
+	if beforeRows == 0 {
+		t.Fatalf("expected seeded policies from NewEnforcer")
 	}
 
 	changed, err := rbac.SeedDefaultPolicy(enforcer)
 	if err != nil {
-		t.Fatalf("SeedDefaultPolicy second call: %v", err)
+		t.Fatalf("SeedDefaultPolicy call: %v", err)
 	}
 	if changed {
 		t.Fatalf("expected no change on second seed")
 	}
 
-	after, err := enforcer.GetPolicy()
-	if err != nil {
-		t.Fatalf("GetPolicy after: %v", err)
+	var afterRows int
+	if err = db.QueryRow(context.Background(), `select count(*) from casbin_rule`).Scan(&afterRows); err != nil {
+		t.Fatalf("count casbin_rule after: %v", err)
 	}
-	if len(before) != len(after) {
-		t.Fatalf("policy count changed on idempotent seed: before=%d after=%d", len(before), len(after))
+	if beforeRows != afterRows {
+		t.Fatalf("policy row count changed on idempotent seed: before=%d after=%d", beforeRows, afterRows)
+	}
+
+	ownerAllowed, err := enforcer.Enforce("tenant_owner", "tenant:tenant-1", "/v1/admin/tenants/tenant-1/members", "GET")
+	if err != nil {
+		t.Fatalf("Enforce owner: %v", err)
+	}
+	if !ownerAllowed {
+		t.Fatalf("expected tenant_owner to be allowed")
+	}
+
+	memberAllowed, err := enforcer.Enforce("member", "tenant:tenant-1", "/v1/admin/tenants/tenant-1/members", "GET")
+	if err != nil {
+		t.Fatalf("Enforce member: %v", err)
+	}
+	if memberAllowed {
+		t.Fatalf("expected member to be denied")
 	}
 }
 
