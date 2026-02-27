@@ -15,7 +15,6 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
-	"anvilkit-auth-template/services/admin-api/internal/rbac"
 	"anvilkit-auth-template/services/admin-api/internal/store"
 )
 
@@ -84,9 +83,6 @@ func (h *Handler) AssignRole(c *gin.Context) error {
 
 func (h *Handler) ListMembers(c *gin.Context) error {
 	tid := c.Param("tenantId")
-	if err := h.requireTenantManager(c, tid); err != nil {
-		return err
-	}
 
 	members, err := h.Store.ListMembers(c, tid)
 	if err != nil {
@@ -103,9 +99,6 @@ func (h *Handler) ListMembers(c *gin.Context) error {
 
 func (h *Handler) AddMember(c *gin.Context) error {
 	tid := c.Param("tenantId")
-	if err := h.requireTenantManager(c, tid); err != nil {
-		return err
-	}
 
 	var req addMemberReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -140,9 +133,6 @@ func (h *Handler) AddMember(c *gin.Context) error {
 func (h *Handler) UpdateMemberRole(c *gin.Context) error {
 	tid := c.Param("tenantId")
 	targetUID := c.Param("uid")
-	if err := h.requireTenantManager(c, tid); err != nil {
-		return err
-	}
 	if err := validateUserID(targetUID); err != nil {
 		return err
 	}
@@ -169,9 +159,6 @@ func (h *Handler) UpdateMemberRole(c *gin.Context) error {
 func (h *Handler) RemoveMember(c *gin.Context) error {
 	tid := c.Param("tenantId")
 	targetUID := c.Param("uid")
-	if err := h.requireTenantManager(c, tid); err != nil {
-		return err
-	}
 	if err := validateUserID(targetUID); err != nil {
 		return err
 	}
@@ -184,38 +171,6 @@ func (h *Handler) RemoveMember(c *gin.Context) error {
 		return apperr.NotFound(errors.New("member_not_found")).WithData(map[string]any{"reason": "member_not_found"})
 	}
 	resp.OK(c, map[string]any{"ok": true})
-	return nil
-}
-
-func (h *Handler) requireTenantManager(c *gin.Context, tid string) error {
-	if h.Enforcer == nil {
-		return apperr.Forbidden(errors.New("rbac_forbidden")).WithData(map[string]any{"reason": "rbac_forbidden", "code": errcode.Forbidden})
-	}
-	uidAny, _ := c.Get("uid")
-	uid, _ := uidAny.(string)
-	tenantRole, exists, err := h.Store.TenantUserRole(c, tid, uid)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return apperr.Forbidden(errors.New("insufficient_role")).WithData(map[string]any{"reason": "insufficient_role", "code": errcode.Forbidden})
-	}
-
-	casbinRole, err := rbac.MapTenantRoleToCasbin(tenantRole)
-	if err != nil {
-		return apperr.Forbidden(errors.New("insufficient_role")).WithData(map[string]any{"reason": "insufficient_role", "code": errcode.Forbidden})
-	}
-
-	dom := fmt.Sprintf("tenant:%s", tid)
-	obj := c.FullPath()
-	act := c.Request.Method
-	ok, err := h.Enforcer.Enforce(casbinRole, dom, obj, act)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return apperr.Forbidden(errors.New("rbac_forbidden")).WithData(map[string]any{"reason": "rbac_forbidden", "code": errcode.Forbidden})
-	}
 	return nil
 }
 

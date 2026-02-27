@@ -24,6 +24,55 @@ import (
 	"anvilkit-auth-template/services/admin-api/internal/testutil"
 )
 
+func TestAdminRBACMiddleware(t *testing.T) {
+	db := mustTestDB(t)
+	truncateTables(t, db)
+
+	tenantID := "tenant-alpha"
+	tenant2ID := "tenant-beta"
+	ownerID := uuid.NewString()
+	memberID := uuid.NewString()
+	tenant2OwnerID := uuid.NewString()
+
+	seed(t, db, tenantID, ownerID, memberID, uuid.NewString(), tenant2ID, tenant2OwnerID)
+
+	r := newTestRouter(t, db)
+
+	t.Run("unauthorized without bearer", func(t *testing.T) {
+		w := performJSONNoToken(r, http.MethodGet, "/api/v1/admin/tenants/"+tenantID+"/members", nil)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("want 401 got %d body=%s", w.Code, w.Body.String())
+		}
+		assertEnvelopeMessage(t, w, "unauthorized")
+	})
+
+	t.Run("forbidden for member role", func(t *testing.T) {
+		memberToken := mustAccessToken(t, memberID, &tenantID)
+		w := performJSON(r, http.MethodGet, "/api/v1/admin/tenants/"+tenantID+"/members", memberToken, nil)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("want 403 got %d body=%s", w.Code, w.Body.String())
+		}
+		assertEnvelopeMessage(t, w, "forbidden")
+	})
+
+	t.Run("owner allowed", func(t *testing.T) {
+		ownerToken := mustAccessToken(t, ownerID, &tenantID)
+		w := performJSON(r, http.MethodGet, "/api/v1/admin/tenants/"+tenantID+"/members", ownerToken, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("want 200 got %d body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("tenant mismatch forbidden", func(t *testing.T) {
+		mismatchToken := mustAccessToken(t, ownerID, &tenant2ID)
+		w := performJSON(r, http.MethodGet, "/api/v1/admin/tenants/"+tenantID+"/members", mismatchToken, nil)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("want 403 got %d body=%s", w.Code, w.Body.String())
+		}
+		assertEnvelopeMessage(t, w, "forbidden")
+	})
+}
+
 func TestMemberManagementEndpoints(t *testing.T) {
 	db := mustTestDB(t)
 	truncateTables(t, db)
@@ -40,22 +89,6 @@ func TestMemberManagementEndpoints(t *testing.T) {
 	r := newTestRouter(t, db)
 
 	ownerToken := mustAccessToken(t, ownerID, &tenantID)
-	memberToken := mustAccessToken(t, memberID, &tenantID)
-	mismatchToken := mustAccessToken(t, ownerID, &otherTenantID)
-
-	t.Run("owner can list members", func(t *testing.T) {
-		w := performJSON(r, http.MethodGet, "/api/v1/admin/tenants/"+tenantID+"/members", ownerToken, nil)
-		if w.Code != http.StatusOK {
-			t.Fatalf("want 200 got %d body=%s", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("member forbidden to list", func(t *testing.T) {
-		w := performJSON(r, http.MethodGet, "/api/v1/admin/tenants/"+tenantID+"/members", memberToken, nil)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("want 403 got %d body=%s", w.Code, w.Body.String())
-		}
-	})
 
 	t.Run("owner can add member", func(t *testing.T) {
 		newUID := uuid.NewString()
@@ -82,13 +115,6 @@ func TestMemberManagementEndpoints(t *testing.T) {
 			t.Fatalf("want 200 got %d body=%s", w.Code, w.Body.String())
 		}
 	})
-
-	t.Run("tenant mismatch forbidden", func(t *testing.T) {
-		w := performJSON(r, http.MethodGet, "/api/v1/admin/tenants/"+tenantID+"/members", mismatchToken, nil)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("want 403 got %d body=%s", w.Code, w.Body.String())
-		}
-	})
 }
 
 func newTestRouter(t *testing.T, db *pgxpool.Pool) *gin.Engine {
@@ -101,7 +127,7 @@ func newTestRouter(t *testing.T, db *pgxpool.Pool) *gin.Engine {
 	h := &handler.Handler{Store: &store.Store{DB: db}, Enforcer: enforcer}
 	r := gin.New()
 	r.Use(ginmid.ErrorHandler())
-	admin := r.Group("/api/v1/admin", ginmid.AuthN("test-secret-only", "anvilkit-auth", "anvilkit-clients"), handler.MustTenantMatch(h.Store))
+	admin := r.Group("/api/v1/admin", ginmid.AuthN("test-secret-only", "anvilkit-auth", "anvilkit-clients"), handler.AdminRBAC(h.Store, enforcer))
 	admin.GET("/tenants/:tenantId/members", ginmid.Wrap(h.ListMembers))
 	admin.POST("/tenants/:tenantId/members", ginmid.Wrap(h.AddMember))
 	admin.PATCH("/tenants/:tenantId/members/:uid", ginmid.Wrap(h.UpdateMemberRole))
@@ -126,6 +152,37 @@ func performJSON(r http.Handler, method, path, token string, body any) *httptest
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
+}
+
+func performJSONNoToken(r http.Handler, method, path string, body any) *httptest.ResponseRecorder {
+	var reader *bytes.Reader
+	if body == nil {
+		reader = bytes.NewReader(nil)
+	} else {
+		b, err := json.Marshal(body)
+		if err != nil {
+			panic(err)
+		}
+		reader = bytes.NewReader(b)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func assertEnvelopeMessage(t *testing.T, w *httptest.ResponseRecorder, msg string) {
+	t.Helper()
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode envelope: %v body=%s", err, w.Body.String())
+	}
+	if body.Message != msg {
+		t.Fatalf("want message=%s got=%s", msg, body.Message)
+	}
 }
 
 func mustAccessToken(t *testing.T, uid string, tid *string) string {
