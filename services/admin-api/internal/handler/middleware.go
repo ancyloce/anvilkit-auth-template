@@ -31,7 +31,7 @@ func AdminRBAC(st *store.Store, enforcer *casbin.Enforcer) gin.HandlerFunc {
 
 		pathTid := tenantIDFromPath(c)
 		if pathTid == "" {
-			_ = c.Error(apperr.Forbidden(errors.New("tenant_mismatch")).WithData(map[string]any{"reason": "tenant_mismatch", "code": errcode.Forbidden}))
+			_ = c.Error(apperr.BadRequest(errors.New("missing_tenant_id_param")).WithData(map[string]any{"reason": "missing_tenant_id_param", "code": errcode.BadRequest}))
 			c.Abort()
 			return
 		}
