@@ -130,5 +130,5 @@ jobs:
 
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.57.2
+          version: v1.64.8
           args: --timeout=5m ${{ matrix.lint-path }}
