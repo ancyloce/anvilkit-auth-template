@@ -31,10 +31,11 @@ func TestAdminRBACMiddleware(t *testing.T) {
 	tenantID := "tenant-alpha"
 	tenant2ID := "tenant-beta"
 	ownerID := uuid.NewString()
+	adminID := uuid.NewString()
 	memberID := uuid.NewString()
 	tenant2OwnerID := uuid.NewString()
 
-	seed(t, db, tenantID, ownerID, memberID, uuid.NewString(), tenant2ID, tenant2OwnerID)
+	seed(t, db, tenantID, ownerID, adminID, memberID, uuid.NewString(), tenant2ID, tenant2OwnerID)
 
 	r := newTestRouter(t, db)
 
@@ -63,6 +64,19 @@ func TestAdminRBACMiddleware(t *testing.T) {
 		}
 	})
 
+	t.Run("admin allowed", func(t *testing.T) {
+		adminToken := mustAccessToken(t, adminID, &tenantID)
+		newUID := uuid.NewString()
+		_, err := db.Exec(context.Background(), `insert into users(id,email,password_hash) values ($1,$2,$3)`, newUID, "new-admin-action@example.com", "hash")
+		if err != nil {
+			t.Fatalf("insert user: %v", err)
+		}
+		w := performJSON(r, http.MethodPost, "/api/v1/admin/tenants/"+tenantID+"/members", adminToken, map[string]string{"user_id": newUID, "role": "member"})
+		if w.Code != http.StatusOK {
+			t.Fatalf("want 200 got %d body=%s", w.Code, w.Body.String())
+		}
+	})
+
 	t.Run("tenant mismatch forbidden", func(t *testing.T) {
 		mismatchToken := mustAccessToken(t, ownerID, &tenant2ID)
 		w := performJSON(r, http.MethodGet, "/api/v1/admin/tenants/"+tenantID+"/members", mismatchToken, nil)
@@ -84,7 +98,7 @@ func TestMemberManagementEndpoints(t *testing.T) {
 	otherTenantID := "tenant-beta"
 	otherOwnerID := uuid.NewString()
 
-	seed(t, db, tenantID, ownerID, memberID, targetID, otherTenantID, otherOwnerID)
+	seed(t, db, tenantID, ownerID, uuid.NewString(), memberID, targetID, otherTenantID, otherOwnerID)
 
 	r := newTestRouter(t, db)
 
@@ -213,7 +227,7 @@ func modelPath() string {
 	return filepath.Join(root, "services", "admin-api", "internal", "rbac", "model.conf")
 }
 
-func seed(t *testing.T, db *pgxpool.Pool, tenantID, ownerID, memberID, targetID, otherTenantID, otherOwnerID string) {
+func seed(t *testing.T, db *pgxpool.Pool, tenantID, ownerID, adminID, memberID, targetID, otherTenantID, otherOwnerID string) {
 	t.Helper()
 
 	if _, err := db.Exec(context.Background(),
@@ -226,10 +240,11 @@ func seed(t *testing.T, db *pgxpool.Pool, tenantID, ownerID, memberID, targetID,
 	if _, err := db.Exec(context.Background(),
 		`insert into users(id,email,password_hash) values
   ($1,'owner@example.com','hash'),
-  ($2,'member@example.com','hash'),
-  ($3,'target@example.com','hash'),
-  ($4,'other-owner@example.com','hash')`,
-		ownerID, memberID, targetID, otherOwnerID,
+  ($2,'admin@example.com','hash'),
+  ($3,'member@example.com','hash'),
+  ($4,'target@example.com','hash'),
+  ($5,'other-owner@example.com','hash')`,
+		ownerID, adminID, memberID, targetID, otherOwnerID,
 	); err != nil {
 		t.Fatalf("seed users: %v", err)
 	}
@@ -237,10 +252,11 @@ func seed(t *testing.T, db *pgxpool.Pool, tenantID, ownerID, memberID, targetID,
 	if _, err := db.Exec(context.Background(),
 		`insert into tenant_users(tenant_id,user_id,role) values
   ($1,$2,'owner'),
-  ($1,$3,'member'),
+  ($1,$3,'admin'),
   ($1,$4,'member'),
-  ($5,$6,'owner')`,
-		tenantID, ownerID, memberID, targetID, otherTenantID, otherOwnerID,
+  ($1,$5,'member'),
+  ($6,$7,'owner')`,
+		tenantID, ownerID, adminID, memberID, targetID, otherTenantID, otherOwnerID,
 	); err != nil {
 		t.Fatalf("seed tenant_users: %v", err)
 	}
