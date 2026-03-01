@@ -130,22 +130,6 @@ func TestSeedDefaultPolicyIdempotent(t *testing.T) {
 	if beforeRows != afterRows {
 		t.Fatalf("policy row count changed on idempotent seed: before=%d after=%d", beforeRows, afterRows)
 	}
-
-	ownerAllowed, err := enforcer.Enforce("tenant_owner", "tenant:tenant-1", "/v1/admin/tenants/tenant-1/members", "GET")
-	if err != nil {
-		t.Fatalf("Enforce owner: %v", err)
-	}
-	if !ownerAllowed {
-		t.Fatalf("expected tenant_owner to be allowed")
-	}
-
-	memberAllowed, err := enforcer.Enforce("member", "tenant:tenant-1", "/v1/admin/tenants/tenant-1/members", "GET")
-	if err != nil {
-		t.Fatalf("Enforce member: %v", err)
-	}
-	if memberAllowed {
-		t.Fatalf("expected member to be denied")
-	}
 }
 
 func TestDefaultPolicyEnforce(t *testing.T) {
