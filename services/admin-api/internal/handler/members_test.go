@@ -240,10 +240,10 @@ func seed(t *testing.T, db *pgxpool.Pool, tenantID, ownerID, adminID, memberID, 
 	if _, err := db.Exec(context.Background(),
 		`insert into users(id,email,password_hash) values
   ($1,'owner@example.com','hash'),
-	  ($2,'admin@example.com','hash'),
-	  ($3,'member@example.com','hash'),
-	  ($4,'target@example.com','hash'),
-	  ($5,'other-owner@example.com','hash')`,
+  ($2,'admin@example.com','hash'),
+  ($3,'member@example.com','hash'),
+  ($4,'target@example.com','hash'),
+  ($5,'other-owner@example.com','hash')`,
 		ownerID, adminID, memberID, targetID, otherOwnerID,
 	); err != nil {
 		t.Fatalf("seed users: %v", err)
@@ -252,10 +252,10 @@ func seed(t *testing.T, db *pgxpool.Pool, tenantID, ownerID, adminID, memberID, 
 	if _, err := db.Exec(context.Background(),
 		`insert into tenant_users(tenant_id,user_id,role) values
   ($1,$2,'owner'),
-	  ($1,$3,'admin'),
-	  ($1,$4,'member'),
-	  ($1,$5,'member'),
-	  ($6,$7,'owner')`,
+  ($1,$3,'admin'),
+  ($1,$4,'member'),
+  ($1,$5,'member'),
+  ($6,$7,'owner')`,
 		tenantID, ownerID, adminID, memberID, targetID, otherTenantID, otherOwnerID,
 	); err != nil {
 		t.Fatalf("seed tenant_users: %v", err)
