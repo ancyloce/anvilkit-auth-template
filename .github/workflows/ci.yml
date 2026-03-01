@@ -40,7 +40,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.23'
 
       - name: Prepare Go workspace dependencies
         run: |
@@ -121,7 +121,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.23'
 
       - name: Prepare Go workspace dependencies
         run: |
@@ -130,5 +130,5 @@ jobs:
 
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.57.2
+          version: v1.64.8
           args: --timeout=5m ${{ matrix.lint-path }}
