@@ -136,6 +136,9 @@ func TestDequeue_InvalidBLPopReply(t *testing.T) {
 	if payload != nil {
 		t.Fatalf("payload=%v want=nil", payload)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("redis expectations: %v", err)
+	}
 }
 
 func TestDequeueInto_DeserializesJSONPayload(t *testing.T) {
