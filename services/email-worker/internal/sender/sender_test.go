@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	commonemail "anvilkit-auth-template/modules/common-go/pkg/email"
 	"github.com/google/uuid"
 )
 
@@ -98,5 +99,20 @@ func TestSend_SMTPError(t *testing.T) {
 	}
 	if len(smtp.calls) != 1 {
 		t.Fatalf("smtp calls=%d want=1", len(smtp.calls))
+	}
+}
+
+func TestSend_ZeroValueSenderReturnsSMTPValidationError(t *testing.T) {
+	s := &Sender{}
+
+	id, err := s.Send(context.Background(), Request{
+		To:      "user@example.com",
+		Subject: "Subject",
+	})
+	if !errors.Is(err, commonemail.ErrEmptySMTPHost) {
+		t.Fatalf("err=%v want=%v", err, commonemail.ErrEmptySMTPHost)
+	}
+	if id != "" {
+		t.Fatalf("id=%q want empty", id)
 	}
 }

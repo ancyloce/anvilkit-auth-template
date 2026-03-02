@@ -38,7 +38,13 @@ func (s *Sender) Send(ctx context.Context, req Request) (string, error) {
 	if strings.TrimSpace(req.To) == "" {
 		return "", ErrEmptyRecipient
 	}
-	if err := s.smtp.SendEmail(req.To, req.Subject, req.HTMLBody, req.TextBody); err != nil {
+	smtpClient := s.smtp
+	if smtpClient == nil {
+		// Preserve historical zero-value Sender behavior: return SMTP config validation
+		// errors instead of panicking when Sender is constructed directly.
+		smtpClient = email.SMTPConfig{}
+	}
+	if err := smtpClient.SendEmail(req.To, req.Subject, req.HTMLBody, req.TextBody); err != nil {
 		return "", err
 	}
 	return uuid.NewString(), nil
