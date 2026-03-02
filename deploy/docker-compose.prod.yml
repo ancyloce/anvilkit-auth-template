@@ -50,7 +50,7 @@ services:
     networks:
       - internal
     entrypoint:
-      - /bin/sh
+      - /bin/bash
       - -ec
       - |
         set -euo pipefail

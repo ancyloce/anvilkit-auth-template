@@ -38,7 +38,7 @@ services:
       - ../services/auth-api/migrations:/migrations/auth-api:ro
       - ../services/admin-api/migrations:/migrations/admin-api:ro
     entrypoint:
-      - /bin/sh
+      - /bin/bash
       - -ec
       - |
         set -euo pipefail
