@@ -55,16 +55,7 @@ func main() {
 	r.NoRoute(handler.NotFound)
 	r.GET("/healthz", ginmid.Wrap(h.Healthz))
 
-	api := r.Group("/api/v1/auth")
-	api.POST("/bootstrap", ginmid.RateLimit(rdb, "rl:bootstrap", 10, time.Minute), ginmid.Wrap(h.Bootstrap))
-	api.POST("/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
-	api.POST("/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
-	api.POST("/refresh", ginmid.Wrap(h.Refresh))
-	api.POST("/logout", ginmid.Wrap(h.Logout))
-	api.POST("/logout_all", ginmid.AuthN(h.JWTSecret, h.JWTIssuer, h.JWTAudience), ginmid.Wrap(h.LogoutAll))
-	api.POST("/switch_tenant", ginmid.AuthN(h.JWTSecret, h.JWTIssuer, h.JWTAudience), ginmid.Wrap(h.SwitchTenant))
-
-	v1 := r.Group("/v1")
+	v1 := r.Group("/api/v1")
 	v1.POST("/bootstrap", ginmid.RateLimit(rdb, "rl:bootstrap", 10, time.Minute), ginmid.Wrap(h.Bootstrap))
 	v1.POST("/auth/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
 	v1.POST("/auth/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
