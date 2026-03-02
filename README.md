@@ -77,6 +77,15 @@ Migrations are applied from both service directories in lexical order:
 - `tenant_users`: user-to-tenant membership table with composite primary key `(tenant_id, user_id)`, `role` (`owner`/`admin`/`member`), and `created_at`.
 - A single `user` can join multiple `tenant`s (many-to-many relationship via `tenant_users`).
 
+### Email service tables
+
+- `email_verifications`: hashed verification tokens for OTP and magic-link flows (`token_hash` is unique; includes `expires_at`, `verified_at`, and attempt counter).
+- `email_jobs`: reusable email job/batch envelope with `job_type`, `status`, optional JSON `payload`, and timestamps.
+- `email_records`: per-email send record linked to optional `email_jobs` / `users` rows, including ESP `external_id` and delivery `status`.
+- `email_status_history`: immutable status timeline for each email record (`queued`, `sent`, `delivered`, `opened`, `clicked`, `bounced`, `failed`) with event metadata and timestamped inserts.
+- `users.email_verified_at`: nullable verification timestamp for user email confirmation state.
+- `users.status`: default is `0` (`pending`) for newly created users.
+
 ## Deployment (Docker Compose + GitHub Actions)
 
 `.github/workflows/deploy.yml` builds and pushes images to GHCR, then deploys to a Linux server via SSH.

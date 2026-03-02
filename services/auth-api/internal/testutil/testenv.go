@@ -97,7 +97,7 @@ func MustJWTSecret(t *testing.T) string {
 
 func ApplyMigrations(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
-	for _, name := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql"} {
+	for _, name := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql", "004_email_service.sql"} {
 		sqlPath := filepath.Join(migrationsDir(t), name)
 		sqlBytes, err := os.ReadFile(sqlPath)
 		if err != nil {
@@ -113,6 +113,10 @@ func TruncateAuthTables(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
 	_, err := db.Exec(context.Background(), `
 truncate table
+  email_status_history,
+  email_records,
+  email_jobs,
+  email_verifications,
   user_roles,
   tenant_users,
   refresh_tokens,
