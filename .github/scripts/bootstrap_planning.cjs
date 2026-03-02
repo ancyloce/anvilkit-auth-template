@@ -42,7 +42,7 @@ async function run({ github, context, core, processEnv }) {
   const env = processEnv || process.env;
   const owner = context.repo.owner;
   const repo = context.repo.repo;
-  const plannerPath = env.ISSUE_MD_PATH || 'docs/issues/m1-m3.md';
+  const plannerPath = env.ISSUE_MD_PATH || 'docs/issues/m4-m6.md';
   const dryRun = String(env.DRY_RUN || 'false') === 'true';
 
   if (!fs.existsSync(plannerPath)) {
@@ -155,7 +155,7 @@ async function run({ github, context, core, processEnv }) {
     created.push(`- ${issue.title} (#${result.data.number})`);
   }
 
-  const marker = '<!-- planning-bootstrap:m1-m3 -->';
+  const marker = '<!-- planning-bootstrap:m4-m6 -->';
   const summary = [
     marker,
     '### Planning bootstrap result',
@@ -210,7 +210,7 @@ async function run({ github, context, core, processEnv }) {
 module.exports = { run, parseIssueBlocks };
 
 if (require.main === module) {
-  const plannerPath = process.env.ISSUE_MD_PATH || 'docs/issues/m1-m3.md';
+  const plannerPath = process.env.ISSUE_MD_PATH || 'docs/issues/m4-m6.md';
   const content = fs.readFileSync(plannerPath, 'utf8');
   const issues = parseIssueBlocks(content);
   console.log(`[local] parsed ${issues.length} issue templates from ${plannerPath}`);
