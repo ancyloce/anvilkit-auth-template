@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -78,6 +79,10 @@ func (c *Consumer) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
+			if isPayloadDecodeError(err) {
+				log.Printf("email-worker: dropped invalid payload from queue=%q: %v", c.QueueName, err)
+				continue
+			}
 			return fmt.Errorf("dequeue email job: %w", err)
 		}
 		if !ok {
@@ -95,7 +100,11 @@ func (c *Consumer) handleJob(ctx context.Context, job EmailJob) error {
 		return fmt.Errorf("%w: %v", ErrInvalidJob, ErrEmptyRecord)
 	}
 	if strings.TrimSpace(job.To) == "" {
-		return fmt.Errorf("%w: %v", ErrInvalidJob, ErrEmptyToEmail)
+		reason := fmt.Sprintf("%v: %v", ErrInvalidJob, ErrEmptyToEmail)
+		if err := c.Store.MarkFailed(ctx, job.RecordID, reason); err != nil {
+			return fmt.Errorf("%s; mark failed: %v", reason, err)
+		}
+		return errors.New(reason)
 	}
 
 	externalID, err := c.Sender.Send(ctx, sender.Request{
@@ -116,4 +125,10 @@ func (c *Consumer) handleJob(ctx context.Context, job EmailJob) error {
 	}
 
 	return nil
+}
+
+func isPayloadDecodeError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr)
 }
