@@ -51,6 +51,23 @@ func TestEnqueue_ReturnsMarshalError(t *testing.T) {
 	}
 }
 
+func TestEnqueue_AllowsNullPayload(t *testing.T) {
+	client, mock := redismock.NewClientMock()
+	q, err := New(client)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+
+	mock.ExpectRPush("email:send", "null").SetVal(1)
+
+	if err := q.Enqueue("email:send", nil); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("redis expectations: %v", err)
+	}
+}
+
 func TestDequeue_ReturnsRawPayloadFromBLPop(t *testing.T) {
 	client, mock := redismock.NewClientMock()
 	q, err := New(client)
@@ -121,6 +138,49 @@ func TestDequeueInto_DeserializesJSONPayload(t *testing.T) {
 	if got.RecordID != "job-3" || got.To != "team@example.com" || got.Priority != 5 {
 		t.Fatalf("unexpected payload: %+v", got)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("redis expectations: %v", err)
+	}
+}
+
+func TestDequeueInto_DeserializesMapPayload(t *testing.T) {
+	client, mock := redismock.NewClientMock()
+	q, err := New(client)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+
+	raw := `{"record_id":"job-4","meta":{"attempt":2},"tags":["verification","email"]}`
+	mock.ExpectBLPop(time.Second, "email:send").SetVal([]string{"email:send", raw})
+
+	var got map[string]any
+	ok, err := q.DequeueInto("email:send", time.Second, &got)
+	if err != nil {
+		t.Fatalf("dequeue into map: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected payload")
+	}
+
+	recordID, _ := got["record_id"].(string)
+	if recordID != "job-4" {
+		t.Fatalf("record_id=%q want=job-4", recordID)
+	}
+
+	meta, _ := got["meta"].(map[string]any)
+	attempt, _ := meta["attempt"].(float64)
+	if int(attempt) != 2 {
+		t.Fatalf("attempt=%v want=2", attempt)
+	}
+
+	tags, _ := got["tags"].([]any)
+	if len(tags) != 2 {
+		t.Fatalf("tags len=%d want=2", len(tags))
+	}
+	if tags[0] != "verification" || tags[1] != "email" {
+		t.Fatalf("unexpected tags: %#v", tags)
+	}
+
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("redis expectations: %v", err)
 	}
