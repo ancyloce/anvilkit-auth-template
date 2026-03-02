@@ -19,6 +19,36 @@ services:
     container_name: anvilkit-redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: postgres:16
+    container_name: anvilkit-postgres-migrate
+    restart: "no"
+    env_file:
+      - ../.env
+    depends_on:
+      pg:
+        condition: service_healthy
+    volumes:
+      - ../services/auth-api/migrations:/migrations/auth-api:ro
+      - ../services/admin-api/migrations:/migrations/admin-api:ro
+    entrypoint:
+      - /bin/bash
+      - -ec
+      - |
+        set -euo pipefail
+        echo "Running DB migration..."
+        ls -la /migrations
+        for f in $$(find /migrations -maxdepth 2 -type f -name '*.sql' | sort); do
+          echo "Applying migration: $$f"
+          psql "$$DB_DSN" -v ON_ERROR_STOP=1 -f "$$f"
+        done
+        echo "DB migration completed."
 
   auth-api:
     build:
@@ -60,3 +90,18 @@ services:
         condition: service_healthy
     ports:
       - "8081:8081"
+
+  email-worker:
+    build:
+      context: ..
+      dockerfile: services/email-worker/Dockerfile
+    container_name: anvilkit-email-worker
+    env_file:
+      - ../.env
+    depends_on:
+      pg:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully

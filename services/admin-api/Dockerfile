@@ -7,6 +7,7 @@ COPY go.work /src/go.work
 COPY modules/common-go /src/modules/common-go
 COPY services/auth-api /src/services/auth-api
 COPY services/admin-api /src/services/admin-api
+COPY services/email-worker /src/services/email-worker
 COPY tools/healthcheck /src/tools/healthcheck
 
 # Remove root workspace entry for container builds to avoid depending on root go.mod/go.sum.

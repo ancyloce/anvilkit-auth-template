@@ -13,15 +13,10 @@ COPY tools/healthcheck /src/tools/healthcheck
 # Remove root workspace entry for container builds to avoid depending on root go.mod/go.sum.
 RUN go work edit -dropuse . && go work sync
 
-WORKDIR /src/services/auth-api
-RUN go mod download && go build -o /out/auth-api ./cmd/auth-api
-
-WORKDIR /src/tools/healthcheck
-RUN go build -o /out/healthcheck .
+WORKDIR /src/services/email-worker
+RUN go mod download && go build -o /out/email-worker ./cmd/worker
 
 FROM gcr.io/distroless/base-debian12
 WORKDIR /app
-COPY --from=build /out/auth-api /app/auth-api
-COPY --from=build /out/healthcheck /app/healthcheck
-EXPOSE 8080
-ENTRYPOINT ["/app/auth-api"]
+COPY --from=build /out/email-worker /app/email-worker
+ENTRYPOINT ["/app/email-worker"]
