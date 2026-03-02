@@ -70,6 +70,18 @@ async function run({ github, context, core, processEnv }) {
       title: 'M3 - RBAC with Casbin',
       description: '完成基于租户域（tid）的 Casbin 鉴权，覆盖默认策略、角色映射、中间件与测试。',
     },
+    M4: {
+      title: 'M4 - Email Service Core',
+      description: '完成邮件服务基础设施：数据库表结构、Redis 队列、email-worker 服务、SMTP 集成，形成可发送邮件的最小闭环。',
+    },
+    M5: {
+      title: 'M5 - Email Verification MVP',
+      description: '实现完整的邮件验证流程：OTP + Magic Link 双验证机制、注册/登录流程改造、防滥用限流、同设备检测。',
+    },
+    M6: {
+      title: 'M6 - Email Service Advanced',
+      description: '完成生产级邮件服务：邮件送达率优化（SPF/DKIM/DMARC）、Bounce 处理、Webhook 集成、分析埋点。',
+    },
   };
 
   if (dryRun) {
@@ -110,6 +122,44 @@ async function run({ github, context, core, processEnv }) {
     milestoneByKey[key] = await ensureMilestone(spec.title, spec.description);
   }
 
+  // Ensure all required labels exist
+  async function ensureLabels(labelNames) {
+    const existingLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
+      owner,
+      repo,
+      per_page: 100,
+    });
+
+    const existingLabelNames = new Set(existingLabels.map((l) => l.name));
+    const labelsToCreate = labelNames.filter((name) => !existingLabelNames.has(name));
+
+    for (const labelName of labelsToCreate) {
+      try {
+        await github.rest.issues.createLabel({
+          owner,
+          repo,
+          name: labelName,
+          color: 'ededed',
+          description: `Auto-created by ${context.workflow}`,
+        });
+        core.info(`Label created: ${labelName}`);
+      } catch (error) {
+        if (error.status !== 422) {
+          core.warning(`Failed to create label ${labelName}: ${error.message}`);
+        }
+      }
+    }
+  }
+
+  // Collect all unique labels from issues
+  const allLabels = new Set();
+  for (const issue of issues) {
+    for (const label of issue.labels) {
+      allLabels.add(label);
+    }
+  }
+  await ensureLabels(Array.from(allLabels));
+
   const existingIssues = await github.paginate(github.rest.issues.listForRepo, {
     owner,
     repo,
@@ -128,7 +178,7 @@ async function run({ github, context, core, processEnv }) {
   const skipped = [];
 
   for (const issue of issues) {
-    const matched = issue.title.match(/^(M[1-3])-\d+/);
+    const matched = issue.title.match(/^(M[1-6])-\d+/);
     if (!matched) {
       core.warning(`Skip issue without milestone prefix: ${issue.title}`);
       continue;
@@ -142,17 +192,22 @@ async function run({ github, context, core, processEnv }) {
     }
 
     const body = `${issue.body}\n\n---\n_This issue was bootstrapped by workflow \`${context.workflow}\` from \`${plannerPath}\`._`;
-    const result = await github.rest.issues.create({
-      owner,
-      repo,
-      title: issue.title,
-      body,
-      labels: issue.labels,
-      milestone: milestone.number,
-    });
+    try {
+      const result = await github.rest.issues.create({
+        owner,
+        repo,
+        title: issue.title,
+        body,
+        labels: issue.labels,
+        milestone: milestone.number,
+      });
 
-    existingByTitle.set(issue.title, result.data);
-    created.push(`- ${issue.title} (#${result.data.number})`);
+      existingByTitle.set(issue.title, result.data);
+      created.push(`- ${issue.title} (#${result.data.number})`);
+    } catch (error) {
+      core.error(`Failed to create issue "${issue.title}": ${error.message}`);
+      skipped.push(`- ${issue.title} (failed: ${error.message})`);
+    }
   }
 
   const marker = '<!-- planning-bootstrap:m4-m6 -->';
