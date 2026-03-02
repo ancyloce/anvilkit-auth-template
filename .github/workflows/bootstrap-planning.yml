@@ -4,13 +4,13 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
     paths:
-      - docs/issues/m1-m3.md
+      - docs/issues/m4-m6.md
       - .github/workflows/bootstrap-planning.yml
       - .github/scripts/bootstrap_planning.cjs
   push:
     branches: [main]
     paths:
-      - docs/issues/m1-m3.md
+      - docs/issues/m4-m6.md
       - .github/workflows/bootstrap-planning.yml
       - .github/scripts/bootstrap_planning.cjs
   workflow_dispatch:
@@ -36,10 +36,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create milestones and issues from docs/issues/m1-m3.md
+      - name: Create milestones and issues from docs/issues/m4-m6.md
         uses: actions/github-script@v7
         env:
-          ISSUE_MD_PATH: docs/issues/m1-m3.md
+          ISSUE_MD_PATH: docs/issues/m4-m6.md
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
           PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
         with:
