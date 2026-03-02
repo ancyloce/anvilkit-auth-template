@@ -19,8 +19,12 @@ type Request struct {
 	TextBody string
 }
 
+type smtpClient interface {
+	SendEmail(to, subject, htmlBody, textBody string) error
+}
+
 type Sender struct {
-	smtp email.SMTPConfig
+	smtp smtpClient
 }
 
 func New(cfg email.SMTPConfig) *Sender {

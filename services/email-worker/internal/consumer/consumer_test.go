@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	commonqueue "anvilkit-auth-template/modules/common-go/pkg/queue"
 	"anvilkit-auth-template/services/email-worker/internal/sender"
+	redismock "github.com/go-redis/redismock/v9"
 )
 
 type queueResp struct {
@@ -314,5 +316,92 @@ func TestRun_StopsGracefullyOnContextCancel(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("run did not stop after context cancellation")
+	}
+}
+
+func TestRun_WithRedisQueue_SuccessPath(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	redisClient, redisMock := redismock.NewClientMock()
+	q, err := commonqueue.New(redisClient)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+
+	raw := `{"record_id":"rec-redis-1","to":"user@example.com","subject":"subject","html_body":"<p>hello</p>","text_body":"hello"}`
+	redisMock.ExpectBLPop(5*time.Second, "email:send").SetVal([]string{"email:send", raw})
+
+	s := &fakeSender{
+		resps: []senderResp{{externalID: "esp-redis-1"}},
+	}
+	st := &fakeStore{
+		onMarkSent: cancel,
+	}
+
+	c := &Consumer{
+		Queue:     q,
+		QueueName: "email:send",
+		Timeout:   5 * time.Second,
+		Sender:    s,
+		Store:     st,
+	}
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if err := redisMock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("redis expectations: %v", err)
+	}
+	if len(s.requests) != 1 {
+		t.Fatalf("send requests=%d want=1", len(s.requests))
+	}
+	if len(st.sent) != 1 || st.sent[0].recordID != "rec-redis-1" || st.sent[0].externalID != "esp-redis-1" {
+		t.Fatalf("sent=%+v want record_id=rec-redis-1 external_id=esp-redis-1", st.sent)
+	}
+	if len(st.failed) != 0 {
+		t.Fatalf("failed records=%d want=0", len(st.failed))
+	}
+}
+
+func TestRun_WithRedisQueue_InvalidJSONDroppedThenProcessesNextJob(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	redisClient, redisMock := redismock.NewClientMock()
+	q, err := commonqueue.New(redisClient)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+
+	redisMock.ExpectBLPop(5*time.Second, "email:send").SetVal([]string{"email:send", "not-json"})
+	redisMock.ExpectBLPop(5*time.Second, "email:send").SetVal([]string{"email:send", `{"record_id":"rec-redis-2","to":"team@example.com"}`})
+
+	s := &fakeSender{
+		resps: []senderResp{{externalID: "esp-redis-2"}},
+	}
+	st := &fakeStore{
+		onMarkSent: cancel,
+	}
+
+	c := &Consumer{
+		Queue:     q,
+		QueueName: "email:send",
+		Timeout:   5 * time.Second,
+		Sender:    s,
+		Store:     st,
+	}
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if err := redisMock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("redis expectations: %v", err)
+	}
+	if len(s.requests) != 1 {
+		t.Fatalf("send requests=%d want=1", len(s.requests))
+	}
+	if len(st.sent) != 1 || st.sent[0].recordID != "rec-redis-2" {
+		t.Fatalf("sent=%+v want record_id=rec-redis-2", st.sent)
 	}
 }

@@ -2,6 +2,7 @@ package email
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"io"
 	"mime"
@@ -181,6 +182,21 @@ func TestGenerateMagicToken_URLSafe(t *testing.T) {
 	}
 }
 
+func TestGenerateMagicToken_DecodesTo32Bytes(t *testing.T) {
+	token, err := GenerateMagicToken()
+	if err != nil {
+		t.Fatalf("generate magic token: %v", err)
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	if len(raw) != 32 {
+		t.Fatalf("decoded token len=%d want=32", len(raw))
+	}
+}
+
 func TestHashToken_SHA256Hex(t *testing.T) {
 	const token = "magic-token"
 	const want = "75f16f3681a386b967e2879e4c266a781cce2e076e645d3ec3cc02df8c11be1e"
@@ -188,5 +204,20 @@ func TestHashToken_SHA256Hex(t *testing.T) {
 	got := HashToken(token)
 	if got != want {
 		t.Fatalf("hash=%q want=%q", got, want)
+	}
+}
+
+func TestHashToken_DeterministicAndDistinct(t *testing.T) {
+	const token = "stable-token"
+
+	first := HashToken(token)
+	second := HashToken(token)
+	other := HashToken("different-token")
+
+	if first != second {
+		t.Fatalf("hash should be deterministic: first=%q second=%q", first, second)
+	}
+	if first == other {
+		t.Fatalf("hashes should differ for different tokens: %q", first)
 	}
 }
