@@ -34,20 +34,28 @@ golangci-lint run ./...
 
 ### Monorepo Structure
 
-Go workspace (`go.work`) with four modules:
+Go workspace (`go.work`) with five modules:
 - `.` — root workspace
 - `./modules/common-go` — shared library (JWT, DB, Redis, HTTP utilities)
 - `./services/auth-api` — authentication service
 - `./services/admin-api` — admin/RBAC service
+- `./tools/healthcheck` — health check utility
 
 ### Handler-Store Pattern
 
 Both services follow the same layered structure:
 ```
 cmd/<service>/main.go       → wires config, DB, Redis, handlers
-internal/config/            → env-based config loading
+internal/config/            → env-based config loading (auth-api only)
 internal/handler/           → HTTP handlers (Gin), calls store
 internal/store/             → SQL queries via pgx
+internal/rbac/              → Casbin RBAC config (admin-api only)
+```
+
+Additional auth-api internal packages:
+```
+internal/auth/crypto/       → password hashing utilities
+internal/auth/token/        → token generation and validation
 ```
 
 Handlers return errors using `apperr` types; the `ErrorHandler` middleware in `common-go/pkg/httpx/ginmid` translates them to the envelope response format.
@@ -93,15 +101,30 @@ Key optional variables (all have defaults):
 | `REDIS_ADDR` | `localhost:6379` | Redis address |
 | `ACCESS_TTL_MIN` | `15` | Access token TTL (minutes) |
 | `REFRESH_TTL_HOURS` | `168` | Refresh token TTL (hours) |
+| `PASSWORD_MIN_LEN` | `8` | Minimum password length |
 | `BCRYPT_COST` | `12` | bcrypt cost (4–31) |
 | `LOGIN_FAIL_LIMIT` | `5` | Max failed logins before rate limit |
+| `LOGIN_FAIL_WINDOW_MIN` | `10` | Failed login rate limit window (minutes) |
 | `CORS_ALLOW_ORIGINS` | `http://localhost:3000` | Allowed CORS origins |
+| `CORS_ALLOW_CREDENTIALS` | `false` | CORS credentials flag |
+| `RBAC_DIR` | `internal/rbac` | Casbin config directory (admin-api only) |
 
 ## Database Migrations
 
-SQL migrations live in `services/auth-api/migrations/` and are applied in order by `scripts/migrate.sh`. The production compose runs a dedicated `migrate` service before the APIs start.
+SQL migrations live in both service directories and are applied in lexical order by `scripts/migrate.sh`:
+- `services/auth-api/migrations/` — core auth tables (001_init.sql, 002_authn_core.sql, 003_multitenant.sql)
+- `services/admin-api/migrations/` — RBAC tables (001_casbin_rule.sql)
 
-Key tables: `tenants`, `users`, `tenant_users`, `user_roles`, `user_password_credentials`, `refresh_sessions`.
+The production compose runs a dedicated `migrate` service before the APIs start.
+
+Key tables:
+- `tenants` — tenant metadata (id, name, created_at)
+- `users` — user accounts (id, email, phone, status, timestamps)
+- `user_password_credentials` — password hashes (user_id, password_hash, updated_at)
+- `tenant_users` — user-to-tenant membership (tenant_id, user_id, created_at)
+- `user_roles` — tenant-scoped roles (tenant_id, user_id, role, created_at)
+- `refresh_sessions` — refresh token rotation chain (id, user_id, token_hash, user_agent, ip, expires_at, revoked_at, replaced_by, created_at)
+- `casbin_rule` — Casbin RBAC policies (admin-api)
 
 ## Deployment
 
