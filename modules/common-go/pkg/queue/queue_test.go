@@ -243,6 +243,9 @@ func TestQueueLength_PropagatesRedisError(t *testing.T) {
 	if _, err := q.QueueLength("email:send"); err == nil || err.Error() != "redis unavailable" {
 		t.Fatalf("err=%v want=%q", err, "redis unavailable")
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("redis expectations: %v", err)
+	}
 }
 
 func TestMethods_ValidateQueueName(t *testing.T) {
