@@ -69,6 +69,15 @@ All responses (success and error) use:
 
 Non-zero `code` indicates an error. Error codes are defined in `modules/common-go/pkg/httpx/errcode`.
 
+### API Prefix Constraint
+
+The current project's API prefix is uniformly constrained to `/api/v1/[module name]`.
+
+For example:
+
+- **auth-api** `/api/v1/auth`
+- **admin-api** `/api/v1/admin`
+
 ### Middleware Chain (both services)
 
 Recovery → RequestID → Logger → CORS → ErrorHandler
