@@ -7,5 +7,6 @@ use (
 	./modules/common-go
 	./services/admin-api
 	./services/auth-api
+	./services/email-worker
 	./tools/healthcheck
 )
