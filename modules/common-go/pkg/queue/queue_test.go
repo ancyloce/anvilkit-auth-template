@@ -117,6 +117,30 @@ func TestDequeue_TimeoutReturnsNoPayload(t *testing.T) {
 	}
 }
 
+func TestDequeue_InvalidBLPopReply(t *testing.T) {
+	client, mock := redismock.NewClientMock()
+	q, err := New(client)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+
+	mock.ExpectBLPop(time.Second, "email:send").SetVal([]string{"email:send"})
+
+	payload, ok, err := q.Dequeue("email:send", time.Second)
+	if !errors.Is(err, ErrInvalidBLPopReply) {
+		t.Fatalf("err=%v want=%v", err, ErrInvalidBLPopReply)
+	}
+	if ok {
+		t.Fatal("expected ok=false on invalid BLPOP reply")
+	}
+	if payload != nil {
+		t.Fatalf("payload=%v want=nil", payload)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("redis expectations: %v", err)
+	}
+}
+
 func TestDequeueInto_DeserializesJSONPayload(t *testing.T) {
 	client, mock := redismock.NewClientMock()
 	q, err := New(client)
@@ -201,6 +225,23 @@ func TestQueueLength_UsesLLen(t *testing.T) {
 	}
 	if n != 7 {
 		t.Fatalf("length=%d want=7", n)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("redis expectations: %v", err)
+	}
+}
+
+func TestQueueLength_PropagatesRedisError(t *testing.T) {
+	client, mock := redismock.NewClientMock()
+	q, err := New(client)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+
+	mock.ExpectLLen("email:send").SetErr(errors.New("redis unavailable"))
+
+	if _, err := q.QueueLength("email:send"); err == nil || err.Error() != "redis unavailable" {
+		t.Fatalf("err=%v want=%q", err, "redis unavailable")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("redis expectations: %v", err)

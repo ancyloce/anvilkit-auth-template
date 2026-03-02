@@ -6,6 +6,7 @@ toolchain go1.24.13
 
 require (
 	anvilkit-auth-template/modules/common-go v0.0.0
+	github.com/go-redis/redismock/v9 v9.2.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.2
 )
