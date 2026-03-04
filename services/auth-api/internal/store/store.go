@@ -268,6 +268,30 @@ for update`,
 	return tx.Commit(ctx)
 }
 
+func (s *Store) ValidateMagicLinkToken(ctx context.Context, magicToken string, now time.Time) error {
+	tokenHash := email.HashToken(magicToken)
+	var expiresAt time.Time
+	err := s.DB.QueryRow(ctx, `
+select expires_at
+from email_verifications
+where token_type = 'magic_link'
+  and token_hash = $1
+  and verified_at is null`,
+		tokenHash,
+	).Scan(&expiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidMagicLink
+		}
+		return err
+	}
+
+	if !expiresAt.After(now) {
+		return ErrVerificationExpired
+	}
+	return nil
+}
+
 func (s *Store) CleanupPendingRegistration(ctx context.Context, userID string) error {
 	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

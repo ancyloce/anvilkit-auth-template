@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"html"
@@ -34,6 +35,8 @@ const (
 	verificationTTL                   = 15 * time.Minute
 	verificationEmailSubject          = "Verify your email"
 	verificationAcceptedMessage       = "registration accepted, please check your email for verification"
+	magicLinkStateCookieName          = "ak_magic_link_state"
+	magicLinkSuccessPath              = "/verify-email/success"
 )
 
 var otpCodePattern = regexp.MustCompile(`^\d{6}$`)
@@ -131,13 +134,17 @@ func (h *Handler) Register(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
+	magicLinkState, err := util.RandomToken(24)
+	if err != nil {
+		return err
+	}
 	expiresAt := time.Now().Add(verificationTTL)
 	registered, err := h.Store.RegisterWithVerification(c, email, req.Password, h.BcryptCost, otp, magicToken, expiresAt)
 	if err != nil {
 		return err
 	}
 
-	magicLink := buildMagicLink(h.PublicBaseURL, magicToken)
+	magicLink := buildMagicLink(h.PublicBaseURL, magicToken, magicLinkState)
 	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
 	if h.Redis == nil {
 		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
@@ -166,6 +173,7 @@ func (h *Handler) Register(c *gin.Context) error {
 		}
 		return err
 	}
+	setMagicLinkStateCookie(c, magicLinkState, expiresAt, h.PublicBaseURL)
 
 	c.JSON(http.StatusAccepted, resp.Envelope{
 		RequestID: c.GetString("request_id"),
@@ -212,25 +220,79 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 
 func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 	token := strings.TrimSpace(c.Query("token"))
-	if token == "" {
-		return apperr.BadRequest(errors.New("invalid_magic_link")).WithData(map[string]any{"reason": "invalid_magic_link"})
+	state := strings.TrimSpace(c.Query("state"))
+	if token == "" || state == "" {
+		renderMagicLinkPage(
+			c,
+			http.StatusBadRequest,
+			"Invalid magic link",
+			"This verification link is invalid. Request a new link and try again.",
+		)
+		return nil
 	}
+	now := time.Now()
 
-	if err := h.Store.VerifyMagicLinkToken(c, token, time.Now()); err != nil {
+	if err := h.Store.ValidateMagicLinkToken(c, token, now); err != nil {
 		if errors.Is(err, store.ErrInvalidMagicLink) {
-			return apperr.BadRequest(err).WithData(map[string]any{"reason": "invalid_magic_link"})
+			renderMagicLinkPage(
+				c,
+				http.StatusBadRequest,
+				"Invalid magic link",
+				"This verification link is invalid. Request a new link and try again.",
+			)
+			return nil
 		}
 		if errors.Is(err, store.ErrVerificationExpired) {
-			return apperr.BadRequest(err).WithData(map[string]any{"reason": "expired_magic_link"})
+			renderMagicLinkPage(
+				c,
+				http.StatusGone,
+				"Magic link expired",
+				"This verification link has expired. Request a new verification email and enter the OTP manually.",
+			)
+			return nil
 		}
 		return err
 	}
 
-	resp.OK(c, dto.VerifyEmailResponse{Message: "Email verified successfully"})
+	cookieState, err := c.Cookie(magicLinkStateCookieName)
+	if err != nil || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(cookieState)), []byte(state)) != 1 {
+		renderMagicLinkPage(
+			c,
+			http.StatusOK,
+			"Enter OTP to verify",
+			"This link was opened from a different browser or device. Please return to the original device and manually enter the 6-digit OTP.",
+		)
+		return nil
+	}
+
+	if err := h.Store.VerifyMagicLinkToken(c, token, now); err != nil {
+		if errors.Is(err, store.ErrInvalidMagicLink) {
+			renderMagicLinkPage(
+				c,
+				http.StatusBadRequest,
+				"Invalid magic link",
+				"This verification link is invalid. Request a new link and try again.",
+			)
+			return nil
+		}
+		if errors.Is(err, store.ErrVerificationExpired) {
+			renderMagicLinkPage(
+				c,
+				http.StatusGone,
+				"Magic link expired",
+				"This verification link has expired. Request a new verification email and enter the OTP manually.",
+			)
+			return nil
+		}
+		return err
+	}
+
+	clearMagicLinkStateCookie(c, h.PublicBaseURL)
+	c.Redirect(http.StatusFound, buildMagicLinkSuccessURL(h.PublicBaseURL))
 	return nil
 }
 
-func buildMagicLink(publicBaseURL, token string) string {
+func buildMagicLink(publicBaseURL, token, state string) string {
 	baseURL := strings.TrimSpace(publicBaseURL)
 	if baseURL == "" {
 		baseURL = "http://localhost:8080"
@@ -244,8 +306,56 @@ func buildMagicLink(publicBaseURL, token string) string {
 	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/auth/verify-magic-link"
 	query := url.Values{}
 	query.Set("token", token)
+	query.Set("state", state)
 	u.RawQuery = query.Encode()
 	return u.String()
+}
+
+func buildMagicLinkSuccessURL(publicBaseURL string) string {
+	baseURL := strings.TrimSpace(publicBaseURL)
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || !u.IsAbs() || strings.TrimSpace(u.Host) == "" {
+		u = &url.URL{Scheme: "http", Host: "localhost:8080"}
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.Path = strings.TrimRight(u.Path, "/") + magicLinkSuccessPath
+	return u.String()
+}
+
+func setMagicLinkStateCookie(c *gin.Context, state string, expiresAt time.Time, publicBaseURL string) {
+	maxAge := int(time.Until(expiresAt).Seconds())
+	if maxAge <= 0 {
+		maxAge = int(verificationTTL.Seconds())
+	}
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(magicLinkStateCookieName, state, maxAge, "/", "", shouldUseSecureCookie(publicBaseURL), true)
+}
+
+func clearMagicLinkStateCookie(c *gin.Context, publicBaseURL string) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(magicLinkStateCookieName, "", -1, "/", "", shouldUseSecureCookie(publicBaseURL), true)
+}
+
+func shouldUseSecureCookie(publicBaseURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(publicBaseURL))
+	return err == nil && strings.EqualFold(u.Scheme, "https")
+}
+
+func renderMagicLinkPage(c *gin.Context, status int, title, message string) {
+	safeTitle := html.EscapeString(title)
+	safeMessage := html.EscapeString(message)
+	page := fmt.Sprintf(
+		`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title></head><body><main><h1>%s</h1><p>%s</p></main></body></html>`,
+		safeTitle,
+		safeTitle,
+		safeMessage,
+	)
+	c.Header("Cache-Control", "no-store")
+	c.Data(status, "text/html; charset=utf-8", []byte(page))
 }
 
 func buildVerificationEmailBody(otp, magicLink string) (string, string) {

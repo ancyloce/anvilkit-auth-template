@@ -150,14 +150,23 @@ where user_id=$1`, userID).Scan(&emailRecordID, &toEmail, &template, &subject, &
 	if !otpPattern.MatchString(job.OTP) {
 		t.Fatalf("job otp=%q should be a 6-digit numeric code", job.OTP)
 	}
-	if job.MagicLink == "" || !regexp.MustCompile(`/api/v1/auth/verify-magic-link\?token=`).MatchString(job.MagicLink) {
-		t.Fatalf("job magic_link=%q missing verify endpoint/token", job.MagicLink)
+	parsedMagicLink, err := url.Parse(job.MagicLink)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	if parsedMagicLink.Query().Get("token") == "" || parsedMagicLink.Query().Get("state") == "" {
+		t.Fatalf("job magic_link=%q missing token/state", job.MagicLink)
 	}
 	if !containsAll(job.TextBody, job.OTP, job.MagicLink) {
 		t.Fatalf("text_body missing OTP or magic link: %q", job.TextBody)
 	}
 	if !containsAll(job.HTMLBody, job.OTP, job.MagicLink) {
 		t.Fatalf("html_body missing OTP or magic link: %q", job.HTMLBody)
+	}
+
+	stateCookie := findCookieByName(res, magicLinkStateCookieName)
+	if stateCookie == nil || strings.TrimSpace(stateCookie.Value) == "" {
+		t.Fatalf("expected %s cookie to be set", magicLinkStateCookieName)
 	}
 }
 
@@ -469,7 +478,7 @@ where u.email=$1`, "queue-down@example.com").Scan(&verificationsCount); err != n
 	}
 }
 
-func TestRegisterVerifyMagicLinkThenLogin(t *testing.T) {
+func TestRegisterVerifyMagicLinkSameDeviceRedirectsThenLogin(t *testing.T) {
 	db := newTestDB(t)
 	rdb := newTestRedis(t)
 	testutil.TruncateAuthTables(t, db)
@@ -489,30 +498,58 @@ func TestRegisterVerifyMagicLinkThenLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pop queued job: %v", err)
 	}
+	stateCookie := findCookieByName(res, magicLinkStateCookieName)
+	if stateCookie == nil {
+		t.Fatalf("%s cookie missing in register response", magicLinkStateCookieName)
+	}
 	parsedLink, err := url.Parse(job.MagicLink)
 	if err != nil {
 		t.Fatalf("parse magic link: %v", err)
 	}
 	token := parsedLink.Query().Get("token")
-	if token == "" {
-		t.Fatalf("magic link token missing: %s", job.MagicLink)
+	state := parsedLink.Query().Get("state")
+	if token == "" || state == "" {
+		t.Fatalf("magic link token/state missing: %s", job.MagicLink)
+	}
+	if stateCookie.Value != state {
+		t.Fatalf("cookie state=%q want=%q", stateCookie.Value, state)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify-magic-link?token="+url.QueryEscape(token), nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify-magic-link?token="+url.QueryEscape(token)+"&state="+url.QueryEscape(state), nil)
+	req.AddCookie(stateCookie)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("verify-magic-link status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	if w.Code != http.StatusFound {
+		t.Fatalf("verify-magic-link status=%d want=%d body=%s", w.Code, http.StatusFound, w.Body.String())
 	}
-	var verifyBody struct {
-		Code int `json:"code"`
-		Data struct {
-			Message string `json:"message"`
-		} `json:"data"`
+	location := w.Header().Get("Location")
+	wantLocation := buildMagicLinkSuccessURL("http://auth.example.com")
+	if location != wantLocation {
+		t.Fatalf("redirect location=%q want=%q", location, wantLocation)
 	}
-	decodeResponse(t, w, &verifyBody)
-	if verifyBody.Code != 0 || verifyBody.Data.Message != "Email verified successfully" {
-		t.Fatalf("unexpected verify-magic-link response: %+v", verifyBody)
+
+	var status int16
+	var emailVerifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `select status,email_verified_at from users where email=$1`, "magic-activate@example.com").Scan(&status, &emailVerifiedAt); err != nil {
+		t.Fatalf("query user after magic-link verify: %v", err)
+	}
+	if status != 1 || emailVerifiedAt == nil {
+		t.Fatalf("user status=%d email_verified_at=%v want status=1 email_verified_at!=nil", status, emailVerifiedAt)
+	}
+
+	var verifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `
+select ev.verified_at
+from email_verifications ev
+join users u on u.id = ev.user_id
+where u.email = $1
+  and ev.token_type = 'magic_link'`,
+		"magic-activate@example.com",
+	).Scan(&verifiedAt); err != nil {
+		t.Fatalf("query magic_link verification row: %v", err)
+	}
+	if verifiedAt == nil {
+		t.Fatal("magic_link verification should be marked verified")
 	}
 
 	loginRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
@@ -521,6 +558,148 @@ func TestRegisterVerifyMagicLinkThenLogin(t *testing.T) {
 	})
 	if loginRes.Code != http.StatusOK {
 		t.Fatalf("login status=%d want=%d body=%s", loginRes.Code, http.StatusOK, loginRes.Body.String())
+	}
+}
+
+func TestVerifyMagicLinkCrossDeviceShowsOTPFallback(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	r := newRegisterRouter(t, db, rdb, 8)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "magic-cross-device@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", res.Code, http.StatusAccepted, res.Body.String())
+	}
+
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	parsedLink, err := url.Parse(job.MagicLink)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	token := parsedLink.Query().Get("token")
+	state := parsedLink.Query().Get("state")
+	if token == "" || state == "" {
+		t.Fatalf("magic link token/state missing: %s", job.MagicLink)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify-magic-link?token="+url.QueryEscape(token)+"&state="+url.QueryEscape(state), nil)
+	req.AddCookie(&http.Cookie{Name: magicLinkStateCookieName, Value: "different-state"})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("verify-magic-link status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "manually enter the 6-digit OTP") {
+		t.Fatalf("fallback page body missing OTP guidance: %s", w.Body.String())
+	}
+
+	var status int16
+	var emailVerifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `select status,email_verified_at from users where email=$1`, "magic-cross-device@example.com").Scan(&status, &emailVerifiedAt); err != nil {
+		t.Fatalf("query user after cross-device verify attempt: %v", err)
+	}
+	if status != 0 || emailVerifiedAt != nil {
+		t.Fatalf("user should remain pending; status=%d email_verified_at=%v", status, emailVerifiedAt)
+	}
+	var magicVerifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `
+select ev.verified_at
+from email_verifications ev
+join users u on u.id = ev.user_id
+where u.email = $1
+  and ev.token_type = 'magic_link'`,
+		"magic-cross-device@example.com",
+	).Scan(&magicVerifiedAt); err != nil {
+		t.Fatalf("query magic_link row after cross-device attempt: %v", err)
+	}
+	if magicVerifiedAt != nil {
+		t.Fatalf("magic_link verified_at=%v want=nil", magicVerifiedAt)
+	}
+}
+
+func TestVerifyMagicLinkExpiredReturnsErrorPage(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	r := newRegisterRouter(t, db, rdb, 8)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "magic-expired@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", res.Code, http.StatusAccepted, res.Body.String())
+	}
+
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	parsedLink, err := url.Parse(job.MagicLink)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	token := parsedLink.Query().Get("token")
+	state := parsedLink.Query().Get("state")
+	if token == "" || state == "" {
+		t.Fatalf("magic link token/state missing: %s", job.MagicLink)
+	}
+	stateCookie := findCookieByName(res, magicLinkStateCookieName)
+	if stateCookie == nil {
+		t.Fatalf("%s cookie missing in register response", magicLinkStateCookieName)
+	}
+
+	if _, err := db.Exec(context.Background(), `
+update email_verifications ev
+set expires_at = now() - interval '1 minute'
+from users u
+where ev.user_id = u.id
+  and u.email = $1
+  and ev.token_type = 'magic_link'
+  and ev.verified_at is null`, "magic-expired@example.com"); err != nil {
+		t.Fatalf("expire magic link row: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify-magic-link?token="+url.QueryEscape(token)+"&state="+url.QueryEscape(state), nil)
+	req.AddCookie(stateCookie)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusGone {
+		t.Fatalf("verify-magic-link status=%d want=%d body=%s", w.Code, http.StatusGone, w.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(w.Body.String()), "expired") {
+		t.Fatalf("error page should mention expiry: %s", w.Body.String())
+	}
+	var status int16
+	var emailVerifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `select status,email_verified_at from users where email=$1`, "magic-expired@example.com").Scan(&status, &emailVerifiedAt); err != nil {
+		t.Fatalf("query user after expired magic-link attempt: %v", err)
+	}
+	if status != 0 || emailVerifiedAt != nil {
+		t.Fatalf("user should remain pending; status=%d email_verified_at=%v", status, emailVerifiedAt)
+	}
+	var magicVerifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `
+select ev.verified_at
+from email_verifications ev
+join users u on u.id = ev.user_id
+where u.email = $1
+  and ev.token_type = 'magic_link'`,
+		"magic-expired@example.com",
+	).Scan(&magicVerifiedAt); err != nil {
+		t.Fatalf("query magic_link row after expired attempt: %v", err)
+	}
+	if magicVerifiedAt != nil {
+		t.Fatalf("magic_link verified_at=%v want=nil", magicVerifiedAt)
 	}
 }
 
@@ -549,18 +728,30 @@ func TestBuildVerificationEmailBodyEscapesHTML(t *testing.T) {
 }
 
 func TestBuildMagicLinkUsesConfiguredPublicBaseURL(t *testing.T) {
-	link := buildMagicLink("https://auth.example.com", "abc123")
-	want := "https://auth.example.com/api/v1/auth/verify-magic-link?token=abc123"
-	if link != want {
-		t.Fatalf("magic link=%q want=%q", link, want)
+	link := buildMagicLink("https://auth.example.com", "abc123", "state123")
+	parsed, err := url.Parse(link)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	if parsed.String() == "" || parsed.Path != "/api/v1/auth/verify-magic-link" {
+		t.Fatalf("unexpected parsed magic link: %s", parsed.String())
+	}
+	if parsed.Query().Get("token") != "abc123" || parsed.Query().Get("state") != "state123" {
+		t.Fatalf("query token/state mismatch in %s", parsed.String())
 	}
 }
 
 func TestBuildMagicLinkSupportsBasePathAndIgnoresFragments(t *testing.T) {
-	link := buildMagicLink("https://example.com/auth/public?foo=bar#frag", "tok")
-	want := "https://example.com/auth/public/api/v1/auth/verify-magic-link?token=tok"
-	if link != want {
-		t.Fatalf("magic link=%q want=%q", link, want)
+	link := buildMagicLink("https://example.com/auth/public?foo=bar#frag", "tok", "st")
+	parsed, err := url.Parse(link)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	if parsed.Path != "/auth/public/api/v1/auth/verify-magic-link" {
+		t.Fatalf("path=%q want=%q", parsed.Path, "/auth/public/api/v1/auth/verify-magic-link")
+	}
+	if parsed.Query().Get("token") != "tok" || parsed.Query().Get("state") != "st" {
+		t.Fatalf("query token/state mismatch in %s", parsed.String())
 	}
 }
 
@@ -584,6 +775,15 @@ func containsAll(s string, subs ...string) bool {
 		}
 	}
 	return true
+}
+
+func findCookieByName(res *httptest.ResponseRecorder, name string) *http.Cookie {
+	for _, c := range res.Result().Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
 }
 
 func assertVerifyEmailErrorReason(t *testing.T, res *httptest.ResponseRecorder, expectedReason string) {
