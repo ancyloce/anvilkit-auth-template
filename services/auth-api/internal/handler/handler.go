@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -220,11 +221,13 @@ func buildMagicLink(c *gin.Context, token string) string {
 }
 
 func buildVerificationEmailBody(otp, magicLink string) (string, string) {
+	safeOTP := html.EscapeString(otp)
+	safeMagicLink := html.EscapeString(magicLink)
 	htmlBody := fmt.Sprintf(
 		`<p>Use this verification code: <strong>%s</strong></p><p>Or verify with this magic link: <a href="%s">%s</a></p>`,
-		otp,
-		magicLink,
-		magicLink,
+		safeOTP,
+		safeMagicLink,
+		safeMagicLink,
 	)
 	textBody := fmt.Sprintf(
 		"Use this verification code: %s\nVerify with this magic link: %s",

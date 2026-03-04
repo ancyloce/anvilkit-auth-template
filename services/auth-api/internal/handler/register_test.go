@@ -356,6 +356,30 @@ where u.email=$1`, "queue-down@example.com").Scan(&verificationsCount); err != n
 	}
 }
 
+func TestBuildVerificationEmailBodyEscapesHTML(t *testing.T) {
+	otp := `12<34>`
+	magicLink := `http://example.com/verify?token="><script>alert(1)</script>`
+	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
+
+	if strings.Contains(htmlBody, `<script>alert(1)</script>`) {
+		t.Fatalf("html body should escape script tag: %s", htmlBody)
+	}
+	if !strings.Contains(htmlBody, `&lt;script&gt;alert(1)&lt;/script&gt;`) {
+		t.Fatalf("html body should contain escaped script text: %s", htmlBody)
+	}
+	if strings.Contains(htmlBody, `<strong>12<34></strong>`) {
+		t.Fatalf("html body should escape OTP value: %s", htmlBody)
+	}
+	if !strings.Contains(htmlBody, `<strong>12&lt;34&gt;</strong>`) {
+		t.Fatalf("html body should contain escaped OTP value: %s", htmlBody)
+	}
+
+	// Plain-text body remains unescaped intentionally for readability.
+	if !strings.Contains(textBody, otp) || !strings.Contains(textBody, magicLink) {
+		t.Fatalf("text body should include original OTP and link: %s", textBody)
+	}
+}
+
 func popQueuedJob(t *testing.T, rdb *goredis.Client) (queuedEmailJob, error) {
 	t.Helper()
 	raw, err := rdb.LPop(context.Background(), emailQueueName).Result()
