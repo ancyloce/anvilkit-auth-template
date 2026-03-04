@@ -26,7 +26,6 @@ func TestStoreCreateVerificationCreatesRowsAndHashesTokens(t *testing.T) {
 	expiresAt := time.Now().Add(15 * time.Minute).Round(time.Second)
 	params := CreateVerificationParams{
 		UserID:     userID,
-		Email:      email,
 		OTP:        "123456",
 		MagicToken: "magic-token-abc",
 		ExpiresAt:  expiresAt,
@@ -112,7 +111,6 @@ func TestStoreCreateVerificationAllowsDuplicateOTPAcrossUsers(t *testing.T) {
 	exp := time.Now().Add(15 * time.Minute).Round(time.Second)
 	_, err := s.CreateVerification(context.Background(), CreateVerificationParams{
 		UserID:     userID1,
-		Email:      email1,
 		OTP:        sharedOTP,
 		MagicToken: "magic-token-user-1",
 		ExpiresAt:  exp,
@@ -122,7 +120,6 @@ func TestStoreCreateVerificationAllowsDuplicateOTPAcrossUsers(t *testing.T) {
 	}
 	_, err = s.CreateVerification(context.Background(), CreateVerificationParams{
 		UserID:     userID2,
-		Email:      email2,
 		OTP:        sharedOTP,
 		MagicToken: "magic-token-user-2",
 		ExpiresAt:  exp,

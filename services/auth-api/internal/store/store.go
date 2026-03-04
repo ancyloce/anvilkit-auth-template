@@ -44,7 +44,6 @@ type RegisteredUser struct {
 
 type CreateVerificationParams struct {
 	UserID     string
-	Email      string
 	OTP        string
 	MagicToken string
 	ExpiresAt  time.Time
@@ -110,7 +109,6 @@ func (s *Store) RegisterWithVerification(
 	}
 	emailRecordID, err := createVerificationTx(ctx, tx, CreateVerificationParams{
 		UserID:     userID,
-		Email:      emailAddr,
 		OTP:        otp,
 		MagicToken: magicToken,
 		ExpiresAt:  expiresAt,
@@ -456,6 +454,11 @@ func insertRegisteredUserWithPassword(ctx context.Context, tx pgx.Tx, userID, em
 }
 
 func createVerificationTx(ctx context.Context, tx pgx.Tx, params CreateVerificationParams) (string, error) {
+	var recipientEmail string
+	if err := tx.QueryRow(ctx, `select email from users where id=$1`, params.UserID).Scan(&recipientEmail); err != nil {
+		return "", err
+	}
+
 	otpHash := email.HashToken(params.OTP)
 	magicLinkHash := email.HashToken(params.MagicToken)
 	if _, err := tx.Exec(
@@ -485,7 +488,7 @@ func createVerificationTx(ctx context.Context, tx pgx.Tx, params CreateVerificat
 		`insert into email_records(id,user_id,to_email,template,subject,status,created_at,updated_at) values($1,$2,$3,'verification_email','Verify your email','queued',now(),now())`,
 		emailRecordID,
 		params.UserID,
-		params.Email,
+		recipientEmail,
 	); err != nil {
 		return "", err
 	}
