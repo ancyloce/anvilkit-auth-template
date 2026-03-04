@@ -129,7 +129,7 @@ func mustTestDB(t *testing.T) *pgxpool.Pool {
 
 func applyMigrations(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
-	for _, name := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql", "004_email_service.sql"} {
+	for _, name := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql", "004_email_service.sql", "005_email_verifications_token_hash_scope.sql"} {
 		sqlPath := filepath.Join(migrationsDir(t), name)
 		sqlBytes, err := os.ReadFile(sqlPath)
 		if err != nil {

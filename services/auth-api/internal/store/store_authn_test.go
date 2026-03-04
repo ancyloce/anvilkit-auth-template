@@ -96,6 +96,54 @@ where id=$1`, res.EmailRecordID).Scan(&recordEmail, &recordStatus, &recordSubjec
 	}
 }
 
+func TestStoreCreateVerificationAllowsDuplicateOTPAcrossUsers(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID1 := "store-verify-user-1"
+	userID2 := "store-verify-user-2"
+	email1 := "verify-user-1@example.com"
+	email2 := "verify-user-2@example.com"
+	seedStoreUser(t, db, userID1, email1)
+	seedStoreUser(t, db, userID2, email2)
+
+	sharedOTP := "123456"
+	exp := time.Now().Add(15 * time.Minute).Round(time.Second)
+	_, err := s.CreateVerification(context.Background(), CreateVerificationParams{
+		UserID:     userID1,
+		Email:      email1,
+		OTP:        sharedOTP,
+		MagicToken: "magic-token-user-1",
+		ExpiresAt:  exp,
+	})
+	if err != nil {
+		t.Fatalf("CreateVerification user1: %v", err)
+	}
+	_, err = s.CreateVerification(context.Background(), CreateVerificationParams{
+		UserID:     userID2,
+		Email:      email2,
+		OTP:        sharedOTP,
+		MagicToken: "magic-token-user-2",
+		ExpiresAt:  exp,
+	})
+	if err != nil {
+		t.Fatalf("CreateVerification user2 (duplicate OTP hash) should succeed: %v", err)
+	}
+
+	otpHash := commonemail.HashToken(sharedOTP)
+	var otpCount int
+	if err := db.QueryRow(context.Background(), `
+select count(1)
+from email_verifications
+where token_type='otp' and token_hash=$1`, otpHash).Scan(&otpCount); err != nil {
+		t.Fatalf("query otp collisions: %v", err)
+	}
+	if otpCount != 2 {
+		t.Fatalf("otp row count=%d want=2", otpCount)
+	}
+}
+
 func TestStoreVerifyEmailOTPPromotesPendingUser(t *testing.T) {
 	db := testutil.MustTestDB(t)
 	testutil.TruncateAuthTables(t, db)
