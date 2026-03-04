@@ -29,6 +29,8 @@ var (
 	ErrVerificationExpired       = errors.New("verification_expired")
 	ErrTooManyOTPAttempts        = errors.New("too_many_otp_attempts")
 	ErrPendingRegistrationGone   = errors.New("pending_registration_not_found")
+	ErrResendUserNotFound        = errors.New("resend_user_not_found")
+	ErrResendAlreadyVerified     = errors.New("resend_already_verified")
 )
 
 const maxOTPVerificationAttempts = 5
@@ -58,6 +60,12 @@ type CreateVerificationResult struct {
 
 type RegisterWithVerificationResult struct {
 	User          RegisteredUser
+	EmailRecordID string
+}
+
+type ResendVerificationResult struct {
+	UserID        string
+	UserEmail     string
 	EmailRecordID string
 }
 
@@ -149,6 +157,75 @@ func (s *Store) CreateVerification(ctx context.Context, params CreateVerificatio
 		return nil, err
 	}
 	return &CreateVerificationResult{EmailRecordID: emailRecordID}, nil
+}
+
+func (s *Store) ResendVerification(
+	ctx context.Context,
+	emailAddr, otp, magicToken string,
+	expiresAt, now time.Time,
+) (*ResendVerificationResult, error) {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	var (
+		userID          string
+		userEmail       string
+		emailVerifiedAt *time.Time
+	)
+	err = tx.QueryRow(ctx, `
+select id, email, email_verified_at
+from users
+where email = $1
+for update`,
+		emailAddr,
+	).Scan(&userID, &userEmail, &emailVerifiedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrResendUserNotFound
+		}
+		return nil, err
+	}
+	if emailVerifiedAt != nil {
+		return nil, ErrResendAlreadyVerified
+	}
+
+	if _, err = tx.Exec(ctx, `
+update email_verifications
+set expires_at = $2
+where user_id = $1
+  and verified_at is null
+  and expires_at > $2`,
+		userID,
+		now,
+	); err != nil {
+		return nil, err
+	}
+
+	emailRecordID, err := createVerificationTx(ctx, tx, CreateVerificationParams{
+		UserID:     userID,
+		OTP:        otp,
+		MagicToken: magicToken,
+		ExpiresAt:  expiresAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &ResendVerificationResult{
+		UserID:        userID,
+		UserEmail:     userEmail,
+		EmailRecordID: emailRecordID,
+	}, nil
 }
 
 func (s *Store) VerifyEmailOTP(ctx context.Context, emailAddr, otp string, now time.Time) error {

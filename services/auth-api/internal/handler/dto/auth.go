@@ -24,6 +24,17 @@ type RegisterResponse struct {
 	User UserSummary `json:"user"`
 }
 
+// Resend verification
+
+type ResendVerificationRequest struct {
+	Email string `json:"email" binding:"required"`
+}
+
+type ResendVerificationResponse struct {
+	Message    string `json:"message"`
+	RetryAfter int    `json:"retry_after"`
+}
+
 // Verify email
 
 type VerifyEmailRequest struct {
