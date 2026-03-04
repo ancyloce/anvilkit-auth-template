@@ -50,7 +50,7 @@ func main() {
 	r.Use(gin.Recovery())
 	r.Use(ginmid.RequestID())
 	r.Use(ginmid.Logger())
-	r.Use(ginmid.CORS(cfg.GetList("CORS_ALLOW_ORIGINS"), cfg.GetBool("CORS_ALLOW_CREDENTIALS", false)))
+	r.Use(ginmid.CORS(cfg.GetList("CORS_ALLOW_ORIGINS"), cfg.GetBool("CORS_ALLOW_CREDENTIALS", true)))
 	r.Use(ginmid.ErrorHandler())
 
 	r.NoRoute(handler.NotFound)

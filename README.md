@@ -61,8 +61,29 @@ Response `data` returns `tenant` and `owner_user` in unified Envelope format.
 | `LOGIN_FAIL_LIMIT` | no | `5` | Failed login rate limit threshold |
 | `LOGIN_FAIL_WINDOW_MIN` | no | `10` | Failed login rate limit window (minutes) |
 | `CORS_ALLOW_ORIGINS` | no | `http://localhost:3000` | Allowed CORS origins |
-| `CORS_ALLOW_CREDENTIALS` | no | `false` | CORS credentials flag |
+| `CORS_ALLOW_CREDENTIALS` | no | `true` | CORS credentials flag (required for browser cookie-based magic-link same-device verification in SPA flows) |
 | `RBAC_DIR` | no | `internal/rbac` | Casbin config directory (admin-api only) |
+
+### Cross-Origin SPA Note (Magic Link Same-Device)
+
+`/api/v1/auth/register` sets the `ak_magic_link_state` cookie, which is required for same-device magic-link auto-verification.
+
+If your frontend is on a different origin (for example `http://localhost:3000` -> `http://localhost:8080`):
+
+- `CORS_ALLOW_CREDENTIALS` must be `true` (default in this repo).
+- `CORS_ALLOW_ORIGINS` must include the exact frontend origin (not `*`).
+- frontend requests to `register` must include credentials.
+
+Example:
+
+```ts
+await fetch("http://localhost:8080/api/v1/auth/register", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  credentials: "include",
+  body: JSON.stringify({ email, password }),
+});
+```
 
 ## Database Migrations
 
