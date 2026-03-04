@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"html"
@@ -37,9 +36,12 @@ const (
 	verificationAcceptedMessage       = "registration accepted, please check your email for verification"
 	magicLinkStateCookieName          = "ak_magic_link_state"
 	magicLinkSuccessPath              = "/verify-email/success"
+	magicLinkStateByteLen             = 24
+	magicLinkStateTextLen             = 32
 )
 
 var otpCodePattern = regexp.MustCompile(`^\d{6}$`)
+var magicLinkStatePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32}$`)
 
 type emailSendJob struct {
 	RecordID  string `json:"record_id"`
@@ -134,7 +136,7 @@ func (h *Handler) Register(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
-	magicLinkState, err := util.RandomToken(24)
+	magicLinkState, err := util.RandomToken(magicLinkStateByteLen)
 	if err != nil {
 		return err
 	}
@@ -221,7 +223,7 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 	token := strings.TrimSpace(c.Query("token"))
 	state := strings.TrimSpace(c.Query("state"))
-	if token == "" || state == "" {
+	if token == "" || state == "" || !isValidMagicLinkState(state) {
 		renderMagicLinkPage(
 			c,
 			http.StatusBadRequest,
@@ -255,7 +257,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 	}
 
 	cookieState, err := c.Cookie(magicLinkStateCookieName)
-	if err != nil || subtle.ConstantTimeCompare([]byte(strings.TrimSpace(cookieState)), []byte(state)) != 1 {
+	if err != nil || !isValidMagicLinkState(cookieState) || strings.TrimSpace(cookieState) != state {
 		renderMagicLinkPage(
 			c,
 			http.StatusOK,
@@ -356,6 +358,10 @@ func renderMagicLinkPage(c *gin.Context, status int, title, message string) {
 	)
 	c.Header("Cache-Control", "no-store")
 	c.Data(status, "text/html; charset=utf-8", []byte(page))
+}
+
+func isValidMagicLinkState(state string) bool {
+	return len(state) == magicLinkStateTextLen && magicLinkStatePattern.MatchString(state)
 }
 
 func buildVerificationEmailBody(otp, magicLink string) (string, string) {
