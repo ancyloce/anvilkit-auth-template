@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -160,7 +161,7 @@ where user_id=$1`, userID).Scan(&emailRecordID, &toEmail, &template, &subject, &
 	if !containsAll(job.TextBody, job.OTP, job.MagicLink) {
 		t.Fatalf("text_body missing OTP or magic link: %q", job.TextBody)
 	}
-	if !containsAll(job.HTMLBody, job.OTP, job.MagicLink) {
+	if !containsAll(html.UnescapeString(job.HTMLBody), job.OTP, job.MagicLink) {
 		t.Fatalf("html_body missing OTP or magic link: %q", job.HTMLBody)
 	}
 
