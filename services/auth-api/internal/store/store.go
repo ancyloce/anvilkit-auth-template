@@ -177,7 +177,7 @@ join users u on u.id = ev.user_id
 where u.email = $1
   and ev.token_type = 'otp'
   and ev.verified_at is null
-order by ev.created_at desc
+order by ev.created_at desc, ev.id desc
 limit 1
 for update`,
 		emailAddr,
