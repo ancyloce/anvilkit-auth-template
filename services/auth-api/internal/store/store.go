@@ -25,6 +25,7 @@ var (
 	ErrTenantNameConflict        = errors.New("tenant_name_conflict")
 	ErrNotInTenant               = errors.New("not_in_tenant")
 	ErrInvalidVerificationOTP    = errors.New("invalid_verification_otp")
+	ErrInvalidMagicLink          = errors.New("invalid_magic_link")
 	ErrVerificationExpired       = errors.New("verification_expired")
 	ErrPendingRegistrationGone   = errors.New("pending_registration_not_found")
 )
@@ -181,6 +182,53 @@ for update`,
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidVerificationOTP
+		}
+		return err
+	}
+
+	if !expiresAt.After(now) {
+		return ErrVerificationExpired
+	}
+
+	if _, err = tx.Exec(ctx, `update email_verifications set verified_at=now() where id=$1`, verificationID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `update users set status=1,email_verified_at=coalesce(email_verified_at,now()),updated_at=now() where id=$1`, userID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (s *Store) VerifyMagicLinkToken(ctx context.Context, magicToken string, now time.Time) error {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	tokenHash := email.HashToken(magicToken)
+	var (
+		verificationID string
+		userID         string
+		expiresAt      time.Time
+	)
+	err = tx.QueryRow(ctx, `
+select id, user_id, expires_at
+from email_verifications
+where token_type = 'magic_link'
+  and token_hash = $1
+  and verified_at is null
+for update`,
+		tokenHash,
+	).Scan(&verificationID, &userID, &expiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidMagicLink
 		}
 		return err
 	}

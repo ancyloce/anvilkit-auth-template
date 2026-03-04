@@ -207,6 +207,26 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 	return nil
 }
 
+func (h *Handler) VerifyMagicLink(c *gin.Context) error {
+	token := strings.TrimSpace(c.Query("token"))
+	if token == "" {
+		return apperr.BadRequest(errors.New("invalid_magic_link")).WithData(map[string]any{"reason": "invalid_magic_link"})
+	}
+
+	if err := h.Store.VerifyMagicLinkToken(c, token, time.Now()); err != nil {
+		if errors.Is(err, store.ErrInvalidMagicLink) {
+			return apperr.BadRequest(err).WithData(map[string]any{"reason": "invalid_magic_link"})
+		}
+		if errors.Is(err, store.ErrVerificationExpired) {
+			return apperr.BadRequest(err).WithData(map[string]any{"reason": "expired_magic_link"})
+		}
+		return err
+	}
+
+	resp.OK(c, dto.VerifyEmailResponse{Message: "Email verified successfully"})
+	return nil
+}
+
 func buildMagicLink(publicBaseURL, token string) string {
 	baseURL := strings.TrimSpace(publicBaseURL)
 	if baseURL == "" {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -356,6 +358,61 @@ where u.email=$1`, "queue-down@example.com").Scan(&verificationsCount); err != n
 	}
 }
 
+func TestRegisterVerifyMagicLinkThenLogin(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
+
+	r := newRegisterRouter(t, db, rdb, 8)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "magic-activate@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", res.Code, http.StatusAccepted, res.Body.String())
+	}
+
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	parsedLink, err := url.Parse(job.MagicLink)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	token := parsedLink.Query().Get("token")
+	if token == "" {
+		t.Fatalf("magic link token missing: %s", job.MagicLink)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify-magic-link?token="+url.QueryEscape(token), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("verify-magic-link status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var verifyBody struct {
+		Code int `json:"code"`
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	decodeResponse(t, w, &verifyBody)
+	if verifyBody.Code != 0 || verifyBody.Data.Message != "Email verified successfully" {
+		t.Fatalf("unexpected verify-magic-link response: %+v", verifyBody)
+	}
+
+	loginRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
+		"email":    "magic-activate@example.com",
+		"password": "Passw0rd!",
+	})
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("login status=%d want=%d body=%s", loginRes.Code, http.StatusOK, loginRes.Body.String())
+	}
+}
+
 func TestBuildVerificationEmailBodyEscapesHTML(t *testing.T) {
 	otp := `12<34>`
 	magicLink := `http://example.com/verify?token="><script>alert(1)</script>`
@@ -428,6 +485,7 @@ func newRegisterRouter(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client, pass
 	h.BcryptCost = 4
 	r.POST("/v1/auth/register", ginmid.Wrap(h.Register))
 	r.POST("/v1/auth/verify-email", ginmid.Wrap(h.VerifyEmail))
+	r.GET("/v1/auth/verify-magic-link", ginmid.Wrap(h.VerifyMagicLink))
 	r.POST("/v1/auth/login", func(c *gin.Context) { c.Request.RemoteAddr = "192.0.2.1:12345"; ginmid.Wrap(h.Login)(c) })
 	return r
 }
