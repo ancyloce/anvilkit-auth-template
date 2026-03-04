@@ -756,6 +756,60 @@ func TestBuildMagicLinkSupportsBasePathAndIgnoresFragments(t *testing.T) {
 	}
 }
 
+func TestIsSecureRequestByTLSOrProxyHeaders(t *testing.T) {
+	tests := []struct {
+		name       string
+		url        string
+		headers    map[string]string
+		wantSecure bool
+	}{
+		{
+			name:       "tls request",
+			url:        "https://auth.example.com/path",
+			wantSecure: true,
+		},
+		{
+			name: "x-forwarded-proto https",
+			url:  "http://auth.example.com/path",
+			headers: map[string]string{
+				"X-Forwarded-Proto": "https",
+			},
+			wantSecure: true,
+		},
+		{
+			name: "forwarded proto https",
+			url:  "http://auth.example.com/path",
+			headers: map[string]string{
+				"Forwarded": "for=192.0.2.1;proto=https;by=203.0.113.43",
+			},
+			wantSecure: true,
+		},
+		{
+			name:       "plain http no proxy headers",
+			url:        "http://auth.example.com/path",
+			wantSecure: false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			c.Request = req
+
+			got := isSecureRequest(c)
+			if got != tc.wantSecure {
+				t.Fatalf("isSecureRequest()=%v want=%v", got, tc.wantSecure)
+			}
+		})
+	}
+}
+
 func popQueuedJob(t *testing.T, rdb *goredis.Client) (queuedEmailJob, error) {
 	t.Helper()
 	raw, err := rdb.LPop(context.Background(), emailQueueName).Result()

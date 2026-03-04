@@ -175,7 +175,7 @@ func (h *Handler) Register(c *gin.Context) error {
 		}
 		return err
 	}
-	setMagicLinkStateCookie(c, magicLinkState, expiresAt, h.PublicBaseURL)
+	setMagicLinkStateCookie(c, magicLinkState, expiresAt)
 
 	c.JSON(http.StatusAccepted, resp.Envelope{
 		RequestID: c.GetString("request_id"),
@@ -289,7 +289,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 		return err
 	}
 
-	clearMagicLinkStateCookie(c, h.PublicBaseURL)
+	clearMagicLinkStateCookie(c)
 	c.Redirect(http.StatusFound, buildMagicLinkSuccessURL(h.PublicBaseURL))
 	return nil
 }
@@ -328,23 +328,48 @@ func buildMagicLinkSuccessURL(publicBaseURL string) string {
 	return u.String()
 }
 
-func setMagicLinkStateCookie(c *gin.Context, state string, expiresAt time.Time, publicBaseURL string) {
+func setMagicLinkStateCookie(c *gin.Context, state string, expiresAt time.Time) {
 	maxAge := int(time.Until(expiresAt).Seconds())
 	if maxAge <= 0 {
 		maxAge = int(verificationTTL.Seconds())
 	}
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(magicLinkStateCookieName, state, maxAge, "/", "", shouldUseSecureCookie(publicBaseURL), true)
+	c.SetCookie(magicLinkStateCookieName, state, maxAge, "/", "", isSecureRequest(c), true)
 }
 
-func clearMagicLinkStateCookie(c *gin.Context, publicBaseURL string) {
+func clearMagicLinkStateCookie(c *gin.Context) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(magicLinkStateCookieName, "", -1, "/", "", shouldUseSecureCookie(publicBaseURL), true)
+	c.SetCookie(magicLinkStateCookieName, "", -1, "/", "", isSecureRequest(c), true)
 }
 
-func shouldUseSecureCookie(publicBaseURL string) bool {
-	u, err := url.Parse(strings.TrimSpace(publicBaseURL))
-	return err == nil && strings.EqualFold(u.Scheme, "https")
+func isSecureRequest(c *gin.Context) bool {
+	if c.Request != nil && c.Request.TLS != nil {
+		return true
+	}
+	xfp := strings.TrimSpace(c.GetHeader("X-Forwarded-Proto"))
+	if xfp != "" {
+		parts := strings.Split(xfp, ",")
+		if len(parts) > 0 && strings.EqualFold(strings.TrimSpace(parts[0]), "https") {
+			return true
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Ssl")), "on") {
+		return true
+	}
+	forwarded := strings.TrimSpace(c.GetHeader("Forwarded"))
+	if forwarded != "" {
+		for _, segment := range strings.Split(forwarded, ";") {
+			kv := strings.SplitN(strings.TrimSpace(segment), "=", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(kv[0]), "proto") &&
+				strings.EqualFold(strings.Trim(strings.TrimSpace(kv[1]), `"`), "https") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func renderMagicLinkPage(c *gin.Context, status int, title, message string) {
