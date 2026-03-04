@@ -200,6 +200,9 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 		if errors.Is(err, store.ErrVerificationExpired) {
 			return apperr.BadRequest(err).WithData(map[string]any{"reason": "expired_otp"})
 		}
+		if errors.Is(err, store.ErrTooManyOTPAttempts) {
+			return apperr.BadRequest(err).WithData(map[string]any{"reason": "too_many_attempts"})
+		}
 		return err
 	}
 

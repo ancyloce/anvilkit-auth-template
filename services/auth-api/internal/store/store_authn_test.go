@@ -194,6 +194,194 @@ values($1,$2,$3,'otp',$4,now())`,
 	}
 }
 
+func TestStoreVerifyEmailOTPWrongCodeIncrementsAttempts(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-otp-invalid-user"
+	emailAddr := "store-otp-invalid@example.com"
+	_, err := db.Exec(context.Background(), `insert into users(id,email,status,created_at,updated_at) values($1,$2,0,now(),now())`, userID, emailAddr)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	_, err = db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at)
+values($1,$2,$3,'otp',$4,now())`,
+		"verify-otp-invalid-row",
+		userID,
+		commonemail.HashToken("654321"),
+		time.Now().Add(15*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("insert email verification: %v", err)
+	}
+
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	err = s.VerifyEmailOTP(ctx, emailAddr, "111111", time.Now())
+	if !errors.Is(err, ErrInvalidVerificationOTP) {
+		t.Fatalf("VerifyEmailOTP err=%v want=%v", err, ErrInvalidVerificationOTP)
+	}
+
+	var attempts int
+	var verifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `select attempts,verified_at from email_verifications where id=$1`, "verify-otp-invalid-row").Scan(&attempts, &verifiedAt); err != nil {
+		t.Fatalf("query verification row: %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d want=1", attempts)
+	}
+	if verifiedAt != nil {
+		t.Fatalf("verified_at=%v want=nil", verifiedAt)
+	}
+}
+
+func TestStoreVerifyEmailOTPExpiredReturnsExpired(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-otp-expired-user"
+	emailAddr := "store-otp-expired@example.com"
+	_, err := db.Exec(context.Background(), `insert into users(id,email,status,created_at,updated_at) values($1,$2,0,now(),now())`, userID, emailAddr)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	otp := "654321"
+	_, err = db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at)
+values($1,$2,$3,'otp',$4,now())`,
+		"verify-otp-expired-row",
+		userID,
+		commonemail.HashToken(otp),
+		time.Now().Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("insert email verification: %v", err)
+	}
+
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	err = s.VerifyEmailOTP(ctx, emailAddr, otp, time.Now())
+	if !errors.Is(err, ErrVerificationExpired) {
+		t.Fatalf("VerifyEmailOTP err=%v want=%v", err, ErrVerificationExpired)
+	}
+
+	var attempts int
+	if err := db.QueryRow(context.Background(), `select attempts from email_verifications where id=$1`, "verify-otp-expired-row").Scan(&attempts); err != nil {
+		t.Fatalf("query verification attempts: %v", err)
+	}
+	if attempts != 0 {
+		t.Fatalf("attempts=%d want=0", attempts)
+	}
+}
+
+func TestStoreVerifyEmailOTPTooManyAttemptsLocksVerification(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-otp-locked-user"
+	emailAddr := "store-otp-locked@example.com"
+	_, err := db.Exec(context.Background(), `insert into users(id,email,status,created_at,updated_at) values($1,$2,0,now(),now())`, userID, emailAddr)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	otp := "654321"
+	_, err = db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,attempts,created_at)
+values($1,$2,$3,'otp',$4,$5,now())`,
+		"verify-otp-locked-row",
+		userID,
+		commonemail.HashToken(otp),
+		time.Now().Add(15*time.Minute),
+		5,
+	)
+	if err != nil {
+		t.Fatalf("insert email verification: %v", err)
+	}
+
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	err = s.VerifyEmailOTP(ctx, emailAddr, "111111", time.Now())
+	if !errors.Is(err, ErrTooManyOTPAttempts) {
+		t.Fatalf("VerifyEmailOTP err=%v want=%v", err, ErrTooManyOTPAttempts)
+	}
+
+	var attempts int
+	if err := db.QueryRow(context.Background(), `select attempts from email_verifications where id=$1`, "verify-otp-locked-row").Scan(&attempts); err != nil {
+		t.Fatalf("query verification attempts: %v", err)
+	}
+	if attempts != 6 {
+		t.Fatalf("attempts=%d want=6", attempts)
+	}
+
+	ctxLocked, cancelLocked := testCtx(t)
+	defer cancelLocked()
+	err = s.VerifyEmailOTP(ctxLocked, emailAddr, otp, time.Now())
+	if !errors.Is(err, ErrTooManyOTPAttempts) {
+		t.Fatalf("VerifyEmailOTP locked err=%v want=%v", err, ErrTooManyOTPAttempts)
+	}
+}
+
+func TestStoreVerifyEmailOTPUsesMostRecentUnverifiedRow(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-otp-latest-user"
+	emailAddr := "store-otp-latest@example.com"
+	_, err := db.Exec(context.Background(), `insert into users(id,email,status,created_at,updated_at) values($1,$2,0,now(),now())`, userID, emailAddr)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	_, err = db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at)
+values($1,$2,$3,'otp',$4,now()-interval '10 minutes')`,
+		"verify-otp-old-row",
+		userID,
+		commonemail.HashToken("111111"),
+		time.Now().Add(30*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("insert old otp row: %v", err)
+	}
+	_, err = db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at)
+values($1,$2,$3,'otp',$4,now())`,
+		"verify-otp-new-row",
+		userID,
+		commonemail.HashToken("222222"),
+		time.Now().Add(30*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("insert new otp row: %v", err)
+	}
+
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	err = s.VerifyEmailOTP(ctx, emailAddr, "111111", time.Now())
+	if !errors.Is(err, ErrInvalidVerificationOTP) {
+		t.Fatalf("VerifyEmailOTP err=%v want=%v", err, ErrInvalidVerificationOTP)
+	}
+
+	var oldAttempts, newAttempts int
+	if err := db.QueryRow(context.Background(), `select attempts from email_verifications where id='verify-otp-old-row'`).Scan(&oldAttempts); err != nil {
+		t.Fatalf("query old attempts: %v", err)
+	}
+	if err := db.QueryRow(context.Background(), `select attempts from email_verifications where id='verify-otp-new-row'`).Scan(&newAttempts); err != nil {
+		t.Fatalf("query new attempts: %v", err)
+	}
+	if oldAttempts != 0 || newAttempts != 1 {
+		t.Fatalf("attempts old=%d new=%d want old=0 new=1", oldAttempts, newAttempts)
+	}
+}
+
 func TestStoreVerifyMagicLinkTokenPromotesPendingUser(t *testing.T) {
 	db := testutil.MustTestDB(t)
 	testutil.TruncateAuthTables(t, db)

@@ -27,8 +27,11 @@ var (
 	ErrInvalidVerificationOTP    = errors.New("invalid_verification_otp")
 	ErrInvalidMagicLink          = errors.New("invalid_magic_link")
 	ErrVerificationExpired       = errors.New("verification_expired")
+	ErrTooManyOTPAttempts        = errors.New("too_many_otp_attempts")
 	ErrPendingRegistrationGone   = errors.New("pending_registration_not_found")
 )
+
+const maxOTPVerificationAttempts = 5
 
 type BootstrapResult struct {
 	UserID     string
@@ -163,20 +166,22 @@ func (s *Store) VerifyEmailOTP(ctx context.Context, emailAddr, otp string, now t
 	var (
 		verificationID string
 		userID         string
+		storedHash     string
 		expiresAt      time.Time
+		attempts       int
 	)
 	err = tx.QueryRow(ctx, `
-select ev.id, ev.user_id, ev.expires_at
+select ev.id, ev.user_id, ev.token_hash, ev.expires_at, ev.attempts
 from email_verifications ev
 join users u on u.id = ev.user_id
 where u.email = $1
   and ev.token_type = 'otp'
-  and ev.token_hash = $2
   and ev.verified_at is null
+order by ev.created_at desc, ev.id desc
+limit 1
 for update`,
 		emailAddr,
-		tokenHash,
-	).Scan(&verificationID, &userID, &expiresAt)
+	).Scan(&verificationID, &userID, &storedHash, &expiresAt, &attempts)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidVerificationOTP
@@ -184,8 +189,26 @@ for update`,
 		return err
 	}
 
+	if attempts > maxOTPVerificationAttempts {
+		return ErrTooManyOTPAttempts
+	}
+
 	if !expiresAt.After(now) {
 		return ErrVerificationExpired
+	}
+
+	if storedHash != tokenHash {
+		attempts++
+		if _, err = tx.Exec(ctx, `update email_verifications set attempts=$2 where id=$1`, verificationID, attempts); err != nil {
+			return err
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return err
+		}
+		if attempts > maxOTPVerificationAttempts {
+			return ErrTooManyOTPAttempts
+		}
+		return ErrInvalidVerificationOTP
 	}
 
 	if _, err = tx.Exec(ctx, `update email_verifications set verified_at=now() where id=$1`, verificationID); err != nil {
