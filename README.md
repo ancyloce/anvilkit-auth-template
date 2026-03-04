@@ -61,7 +61,7 @@ Response `data` returns `tenant` and `owner_user` in unified Envelope format.
 | `LOGIN_FAIL_LIMIT` | no | `5` | Failed login rate limit threshold |
 | `LOGIN_FAIL_WINDOW_MIN` | no | `10` | Failed login rate limit window (minutes) |
 | `CORS_ALLOW_ORIGINS` | no | `http://localhost:3000` | Allowed CORS origins |
-| `CORS_ALLOW_CREDENTIALS` | no | `false` | CORS credentials flag |
+| `CORS_ALLOW_CREDENTIALS` | no | `true` | CORS credentials flag (required for browser cookie-based magic-link same-device verification in SPA flows) |
 | `RBAC_DIR` | no | `internal/rbac` | Casbin config directory (admin-api only) |
 
 ## Database Migrations
