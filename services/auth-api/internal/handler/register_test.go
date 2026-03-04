@@ -308,6 +308,117 @@ func TestRegisterVerifyEmailThenLogin(t *testing.T) {
 	}
 }
 
+func TestVerifyEmailWrongOTPReturnsInvalidOTP(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	r := newRegisterRouter(t, db, rdb, 8)
+	registerRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "wrong-otp@example.com",
+		"password": "Passw0rd!",
+	})
+	if registerRes.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", registerRes.Code, http.StatusAccepted, registerRes.Body.String())
+	}
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+
+	wrongOTP := "000000"
+	if wrongOTP == job.OTP {
+		wrongOTP = "999999"
+	}
+	verifyRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "wrong-otp@example.com",
+		"otp":   wrongOTP,
+	})
+	assertVerifyEmailErrorReason(t, verifyRes, "invalid_otp")
+}
+
+func TestVerifyEmailExpiredOTPReturnsExpiredOTP(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	r := newRegisterRouter(t, db, rdb, 8)
+	registerRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "expired-otp@example.com",
+		"password": "Passw0rd!",
+	})
+	if registerRes.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", registerRes.Code, http.StatusAccepted, registerRes.Body.String())
+	}
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+
+	if _, err := db.Exec(context.Background(), `
+update email_verifications ev
+set expires_at = now() - interval '1 minute'
+from users u
+where ev.user_id = u.id
+  and u.email = $1
+  and ev.token_type = 'otp'
+  and ev.verified_at is null`, "expired-otp@example.com"); err != nil {
+		t.Fatalf("expire otp row: %v", err)
+	}
+
+	verifyRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "expired-otp@example.com",
+		"otp":   job.OTP,
+	})
+	assertVerifyEmailErrorReason(t, verifyRes, "expired_otp")
+}
+
+func TestVerifyEmailTooManyAttemptsReturnsTooManyAttempts(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	r := newRegisterRouter(t, db, rdb, 8)
+	registerRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "otp-lock@example.com",
+		"password": "Passw0rd!",
+	})
+	if registerRes.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", registerRes.Code, http.StatusAccepted, registerRes.Body.String())
+	}
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+
+	wrongOTP := "000000"
+	if wrongOTP == job.OTP {
+		wrongOTP = "999999"
+	}
+	for i := 1; i <= 5; i++ {
+		verifyRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+			"email": "otp-lock@example.com",
+			"otp":   wrongOTP,
+		})
+		assertVerifyEmailErrorReason(t, verifyRes, "invalid_otp")
+	}
+
+	sixthRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "otp-lock@example.com",
+		"otp":   wrongOTP,
+	})
+	assertVerifyEmailErrorReason(t, sixthRes, "too_many_attempts")
+
+	correctAfterLockRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "otp-lock@example.com",
+		"otp":   job.OTP,
+	})
+	assertVerifyEmailErrorReason(t, correctAfterLockRes, "too_many_attempts")
+}
+
 func TestRegisterQueueUnavailableCleansUpPendingUser(t *testing.T) {
 	db := newTestDB(t)
 	testutil.TruncateAuthTables(t, db)
@@ -473,6 +584,26 @@ func containsAll(s string, subs ...string) bool {
 		}
 	}
 	return true
+}
+
+func assertVerifyEmailErrorReason(t *testing.T, res *httptest.ResponseRecorder, expectedReason string) {
+	t.Helper()
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want=%d body=%s", res.Code, http.StatusBadRequest, res.Body.String())
+	}
+	var body struct {
+		Code int `json:"code"`
+		Data struct {
+			Reason string `json:"reason"`
+		} `json:"data"`
+	}
+	decodeResponse(t, res, &body)
+	if body.Code != errcode.BadRequest {
+		t.Fatalf("code=%d want=%d body=%s", body.Code, errcode.BadRequest, res.Body.String())
+	}
+	if body.Data.Reason != expectedReason {
+		t.Fatalf("reason=%q want=%q body=%s", body.Data.Reason, expectedReason, res.Body.String())
+	}
 }
 
 func newRegisterRouter(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client, passwordMinLen int) *gin.Engine {
