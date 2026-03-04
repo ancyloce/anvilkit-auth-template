@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,15 +16,33 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
+	commonemail "anvilkit-auth-template/modules/common-go/pkg/email"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
+	"anvilkit-auth-template/modules/common-go/pkg/queue"
 	"anvilkit-auth-template/modules/common-go/pkg/util"
 	"anvilkit-auth-template/services/auth-api/internal/auth/crypto"
 	"anvilkit-auth-template/services/auth-api/internal/handler/dto"
 	"anvilkit-auth-template/services/auth-api/internal/store"
 )
 
-const userStatusActive int16 = 1
+const (
+	userStatusActive            int16 = 1
+	emailQueueName                    = "email:send"
+	verificationTTL                   = 15 * time.Minute
+	verificationEmailSubject          = "Verify your email"
+	verificationAcceptedMessage       = "registration accepted, please check your email for verification"
+)
+
+type emailSendJob struct {
+	RecordID  string `json:"record_id"`
+	To        string `json:"to"`
+	Subject   string `json:"subject"`
+	HTMLBody  string `json:"html_body"`
+	TextBody  string `json:"text_body"`
+	OTP       string `json:"otp"`
+	MagicLink string `json:"magic_link"`
+}
 
 type Handler struct {
 	Store           *store.Store
@@ -103,15 +122,82 @@ func (h *Handler) Register(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
-	c.JSON(http.StatusCreated, resp.Envelope{
+	otp, err := commonemail.GenerateOTP()
+	if err != nil {
+		return err
+	}
+	magicToken, err := commonemail.GenerateMagicToken()
+	if err != nil {
+		return err
+	}
+	expiresAt := time.Now().Add(verificationTTL)
+	created, err := h.Store.CreateVerification(c, store.CreateVerificationParams{
+		UserID:     user.ID,
+		Email:      user.Email,
+		OTP:        otp,
+		MagicToken: magicToken,
+		ExpiresAt:  expiresAt,
+	})
+	if err != nil {
+		return err
+	}
+
+	magicLink := buildMagicLink(c, magicToken)
+	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
+	q, err := queue.New(h.Redis)
+	if err != nil {
+		return err
+	}
+	if err := q.EnqueueContext(c, emailQueueName, emailSendJob{
+		RecordID:  created.EmailRecordID,
+		To:        user.Email,
+		Subject:   verificationEmailSubject,
+		HTMLBody:  htmlBody,
+		TextBody:  textBody,
+		OTP:       otp,
+		MagicLink: magicLink,
+	}); err != nil {
+		return err
+	}
+
+	c.JSON(http.StatusAccepted, resp.Envelope{
 		RequestID: c.GetString("request_id"),
 		Code:      0,
-		Message:   "ok",
+		Message:   verificationAcceptedMessage,
 		Data: dto.RegisterResponse{
 			User: dto.UserSummary{ID: user.ID, Email: user.Email},
 		},
 	})
 	return nil
+}
+
+func buildMagicLink(c *gin.Context, token string) string {
+	scheme := "http"
+	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	host := c.Request.Host
+	if strings.TrimSpace(host) == "" {
+		host = "localhost:8080"
+	}
+	query := url.Values{}
+	query.Set("token", token)
+	return fmt.Sprintf("%s://%s/api/v1/auth/verify-magic-link?%s", scheme, host, query.Encode())
+}
+
+func buildVerificationEmailBody(otp, magicLink string) (string, string) {
+	htmlBody := fmt.Sprintf(
+		`<p>Use this verification code: <strong>%s</strong></p><p>Or verify with this magic link: <a href="%s">%s</a></p>`,
+		otp,
+		magicLink,
+		magicLink,
+	)
+	textBody := fmt.Sprintf(
+		"Use this verification code: %s\nVerify with this magic link: %s",
+		otp,
+		magicLink,
+	)
+	return htmlBody, textBody
 }
 
 func (h *Handler) Login(c *gin.Context) error {

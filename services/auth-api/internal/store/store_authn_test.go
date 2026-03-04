@@ -8,10 +8,93 @@ import (
 	"testing"
 	"time"
 
+	commonemail "anvilkit-auth-template/modules/common-go/pkg/email"
 	"anvilkit-auth-template/services/auth-api/internal/testutil"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestStoreCreateVerificationCreatesRowsAndHashesTokens(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-verify-user"
+	email := "verify-user@example.com"
+	seedStoreUser(t, db, userID, email)
+
+	expiresAt := time.Now().Add(15 * time.Minute).Round(time.Second)
+	params := CreateVerificationParams{
+		UserID:     userID,
+		Email:      email,
+		OTP:        "123456",
+		MagicToken: "magic-token-abc",
+		ExpiresAt:  expiresAt,
+	}
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	res, err := s.CreateVerification(ctx, params)
+	if err != nil {
+		t.Fatalf("CreateVerification: %v", err)
+	}
+	if res == nil || res.EmailRecordID == "" {
+		t.Fatalf("unexpected create verification result: %+v", res)
+	}
+
+	rows, err := db.Query(context.Background(), `
+select token_type, token_hash, expires_at
+from email_verifications
+where user_id=$1`, userID)
+	if err != nil {
+		t.Fatalf("query email_verifications: %v", err)
+	}
+	defer rows.Close()
+
+	gotHashes := map[string]string{}
+	gotExpires := map[string]time.Time{}
+	for rows.Next() {
+		var tokenType string
+		var tokenHash string
+		var gotExpiry time.Time
+		if err := rows.Scan(&tokenType, &tokenHash, &gotExpiry); err != nil {
+			t.Fatalf("scan email_verifications: %v", err)
+		}
+		gotHashes[tokenType] = tokenHash
+		gotExpires[tokenType] = gotExpiry.Round(time.Second)
+	}
+	if rows.Err() != nil {
+		t.Fatalf("iterate email_verifications: %v", rows.Err())
+	}
+
+	if len(gotHashes) != 2 {
+		t.Fatalf("verification row count=%d want=2", len(gotHashes))
+	}
+	if gotHashes["otp"] != commonemail.HashToken(params.OTP) {
+		t.Fatalf("otp hash=%q want=%q", gotHashes["otp"], commonemail.HashToken(params.OTP))
+	}
+	if gotHashes["magic_link"] != commonemail.HashToken(params.MagicToken) {
+		t.Fatalf("magic hash=%q want=%q", gotHashes["magic_link"], commonemail.HashToken(params.MagicToken))
+	}
+	if !gotExpires["otp"].Equal(expiresAt) || !gotExpires["magic_link"].Equal(expiresAt) {
+		t.Fatalf("expires_at mismatch otp=%s magic=%s want=%s", gotExpires["otp"], gotExpires["magic_link"], expiresAt)
+	}
+
+	var (
+		recordEmail   string
+		recordStatus  string
+		recordSubject string
+	)
+	err = db.QueryRow(context.Background(), `
+select to_email,status,subject
+from email_records
+where id=$1`, res.EmailRecordID).Scan(&recordEmail, &recordStatus, &recordSubject)
+	if err != nil {
+		t.Fatalf("query email_records: %v", err)
+	}
+	if recordEmail != email || recordStatus != "queued" || recordSubject != "Verify your email" {
+		t.Fatalf("unexpected email record values: email=%q status=%q subject=%q", recordEmail, recordStatus, recordSubject)
+	}
+}
 
 func TestStoreRotateRefreshTokenRevokesOldAndCreatesNew(t *testing.T) {
 	db := testutil.MustTestDB(t)

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"anvilkit-auth-template/modules/common-go/pkg/email"
 	"anvilkit-auth-template/services/auth-api/internal/auth/crypto"
 )
 
@@ -37,6 +38,18 @@ type RegisteredUser struct {
 	Email string
 }
 
+type CreateVerificationParams struct {
+	UserID     string
+	Email      string
+	OTP        string
+	MagicToken string
+	ExpiresAt  time.Time
+}
+
+type CreateVerificationResult struct {
+	EmailRecordID string
+}
+
 type LoginUser struct {
 	ID           string
 	Email        string
@@ -60,7 +73,7 @@ func (s *Store) Register(ctx context.Context, email, password string, bcryptCost
 	if err != nil {
 		return nil, err
 	}
-	if _, err = tx.Exec(ctx, `insert into users(id,email,status,created_at,updated_at) values($1,$2,1,now(),now())`, id, email); err != nil {
+	if _, err = tx.Exec(ctx, `insert into users(id,email,status,created_at,updated_at) values($1,$2,0,now(),now())`, id, email); err != nil {
 		return nil, err
 	}
 	if _, err = tx.Exec(ctx, `insert into user_password_credentials(user_id,password_hash,updated_at) values($1,$2,now())`, id, h); err != nil {
@@ -70,6 +83,57 @@ func (s *Store) Register(ctx context.Context, email, password string, bcryptCost
 		return nil, err
 	}
 	return &RegisteredUser{ID: id, Email: email}, nil
+}
+
+func (s *Store) CreateVerification(ctx context.Context, params CreateVerificationParams) (*CreateVerificationResult, error) {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	otpHash := email.HashToken(params.OTP)
+	magicLinkHash := email.HashToken(params.MagicToken)
+	if _, err = tx.Exec(
+		ctx,
+		`insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at) values($1,$2,$3,'otp',$4,now())`,
+		uuid.NewString(),
+		params.UserID,
+		otpHash,
+		params.ExpiresAt,
+	); err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(
+		ctx,
+		`insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at) values($1,$2,$3,'magic_link',$4,now())`,
+		uuid.NewString(),
+		params.UserID,
+		magicLinkHash,
+		params.ExpiresAt,
+	); err != nil {
+		return nil, err
+	}
+
+	emailRecordID := uuid.NewString()
+	if _, err = tx.Exec(
+		ctx,
+		`insert into email_records(id,user_id,to_email,template,subject,status,created_at,updated_at) values($1,$2,$3,'verification_email','Verify your email','queued',now(),now())`,
+		emailRecordID,
+		params.UserID,
+		params.Email,
+	); err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &CreateVerificationResult{EmailRecordID: emailRecordID}, nil
 }
 
 func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName string, bcryptCost int) (*BootstrapResult, error) {
