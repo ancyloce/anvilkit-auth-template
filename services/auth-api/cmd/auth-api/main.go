@@ -37,6 +37,7 @@ func main() {
 		JWTIssuer:       authCfg.JWTIssuer,
 		JWTAudience:     authCfg.JWTAudience,
 		JWTSecret:       authCfg.JWTSecret,
+		PublicBaseURL:   authCfg.PublicBaseURL,
 		AccessTTL:       authCfg.AccessTTL,
 		RefreshTTL:      authCfg.RefreshTTL,
 		PasswordMinLen:  authCfg.PasswordMinLen,

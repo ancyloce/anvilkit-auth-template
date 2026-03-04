@@ -54,6 +54,7 @@ type Handler struct {
 	JWTIssuer       string
 	JWTAudience     string
 	JWTSecret       string
+	PublicBaseURL   string
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
 	PasswordMinLen  int
@@ -136,7 +137,7 @@ func (h *Handler) Register(c *gin.Context) error {
 		return err
 	}
 
-	magicLink := buildMagicLink(c, magicToken)
+	magicLink := buildMagicLink(h.PublicBaseURL, magicToken)
 	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
 	if h.Redis == nil {
 		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
@@ -206,18 +207,22 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 	return nil
 }
 
-func buildMagicLink(c *gin.Context, token string) string {
-	scheme := "http"
-	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
-		scheme = "https"
+func buildMagicLink(publicBaseURL, token string) string {
+	baseURL := strings.TrimSpace(publicBaseURL)
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
 	}
-	host := c.Request.Host
-	if strings.TrimSpace(host) == "" {
-		host = "localhost:8080"
+	u, err := url.Parse(baseURL)
+	if err != nil || !u.IsAbs() || strings.TrimSpace(u.Host) == "" {
+		u = &url.URL{Scheme: "http", Host: "localhost:8080"}
 	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/auth/verify-magic-link"
 	query := url.Values{}
 	query.Set("token", token)
-	return fmt.Sprintf("%s://%s/api/v1/auth/verify-magic-link?%s", scheme, host, query.Encode())
+	u.RawQuery = query.Encode()
+	return u.String()
 }
 
 func buildVerificationEmailBody(otp, magicLink string) (string, string) {

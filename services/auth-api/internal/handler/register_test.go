@@ -380,6 +380,22 @@ func TestBuildVerificationEmailBodyEscapesHTML(t *testing.T) {
 	}
 }
 
+func TestBuildMagicLinkUsesConfiguredPublicBaseURL(t *testing.T) {
+	link := buildMagicLink("https://auth.example.com", "abc123")
+	want := "https://auth.example.com/api/v1/auth/verify-magic-link?token=abc123"
+	if link != want {
+		t.Fatalf("magic link=%q want=%q", link, want)
+	}
+}
+
+func TestBuildMagicLinkSupportsBasePathAndIgnoresFragments(t *testing.T) {
+	link := buildMagicLink("https://example.com/auth/public?foo=bar#frag", "tok")
+	want := "https://example.com/auth/public/api/v1/auth/verify-magic-link?token=tok"
+	if link != want {
+		t.Fatalf("magic link=%q want=%q", link, want)
+	}
+}
+
 func popQueuedJob(t *testing.T, rdb *goredis.Client) (queuedEmailJob, error) {
 	t.Helper()
 	raw, err := rdb.LPop(context.Background(), emailQueueName).Result()
