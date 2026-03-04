@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"anvilkit-auth-template/modules/common-go/pkg/email"
 	"anvilkit-auth-template/services/auth-api/internal/auth/crypto"
 )
 
@@ -23,6 +24,10 @@ var (
 	ErrBootstrapPasswordMismatch = errors.New("bootstrap_password_mismatch")
 	ErrTenantNameConflict        = errors.New("tenant_name_conflict")
 	ErrNotInTenant               = errors.New("not_in_tenant")
+	ErrInvalidVerificationOTP    = errors.New("invalid_verification_otp")
+	ErrInvalidMagicLink          = errors.New("invalid_magic_link")
+	ErrVerificationExpired       = errors.New("verification_expired")
+	ErrPendingRegistrationGone   = errors.New("pending_registration_not_found")
 )
 
 type BootstrapResult struct {
@@ -35,6 +40,22 @@ type BootstrapResult struct {
 type RegisteredUser struct {
 	ID    string
 	Email string
+}
+
+type CreateVerificationParams struct {
+	UserID     string
+	OTP        string
+	MagicToken string
+	ExpiresAt  time.Time
+}
+
+type CreateVerificationResult struct {
+	EmailRecordID string
+}
+
+type RegisterWithVerificationResult struct {
+	User          RegisteredUser
+	EmailRecordID string
 }
 
 type LoginUser struct {
@@ -56,20 +77,196 @@ func (s *Store) Register(ctx context.Context, email, password string, bcryptCost
 	}()
 
 	id := uuid.NewString()
-	h, err := crypto.HashPassword(password, bcryptCost)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = tx.Exec(ctx, `insert into users(id,email,status,created_at,updated_at) values($1,$2,1,now(),now())`, id, email); err != nil {
-		return nil, err
-	}
-	if _, err = tx.Exec(ctx, `insert into user_password_credentials(user_id,password_hash,updated_at) values($1,$2,now())`, id, h); err != nil {
+	if err = insertRegisteredUserWithPassword(ctx, tx, id, email, password, bcryptCost); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return &RegisteredUser{ID: id, Email: email}, nil
+}
+
+func (s *Store) RegisterWithVerification(
+	ctx context.Context,
+	emailAddr, password string,
+	bcryptCost int,
+	otp, magicToken string,
+	expiresAt time.Time,
+) (*RegisterWithVerificationResult, error) {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	userID := uuid.NewString()
+	if err = insertRegisteredUserWithPassword(ctx, tx, userID, emailAddr, password, bcryptCost); err != nil {
+		return nil, err
+	}
+	emailRecordID, err := createVerificationTx(ctx, tx, CreateVerificationParams{
+		UserID:     userID,
+		OTP:        otp,
+		MagicToken: magicToken,
+		ExpiresAt:  expiresAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &RegisterWithVerificationResult{
+		User:          RegisteredUser{ID: userID, Email: emailAddr},
+		EmailRecordID: emailRecordID,
+	}, nil
+}
+
+func (s *Store) CreateVerification(ctx context.Context, params CreateVerificationParams) (*CreateVerificationResult, error) {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	emailRecordID, err := createVerificationTx(ctx, tx, params)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &CreateVerificationResult{EmailRecordID: emailRecordID}, nil
+}
+
+func (s *Store) VerifyEmailOTP(ctx context.Context, emailAddr, otp string, now time.Time) error {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	tokenHash := email.HashToken(otp)
+	var (
+		verificationID string
+		userID         string
+		expiresAt      time.Time
+	)
+	err = tx.QueryRow(ctx, `
+select ev.id, ev.user_id, ev.expires_at
+from email_verifications ev
+join users u on u.id = ev.user_id
+where u.email = $1
+  and ev.token_type = 'otp'
+  and ev.token_hash = $2
+  and ev.verified_at is null
+for update`,
+		emailAddr,
+		tokenHash,
+	).Scan(&verificationID, &userID, &expiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidVerificationOTP
+		}
+		return err
+	}
+
+	if !expiresAt.After(now) {
+		return ErrVerificationExpired
+	}
+
+	if _, err = tx.Exec(ctx, `update email_verifications set verified_at=now() where id=$1`, verificationID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `update users set status=1,email_verified_at=coalesce(email_verified_at,now()),updated_at=now() where id=$1`, userID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (s *Store) VerifyMagicLinkToken(ctx context.Context, magicToken string, now time.Time) error {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	tokenHash := email.HashToken(magicToken)
+	var (
+		verificationID string
+		userID         string
+		expiresAt      time.Time
+	)
+	err = tx.QueryRow(ctx, `
+select id, user_id, expires_at
+from email_verifications
+where token_type = 'magic_link'
+  and token_hash = $1
+  and verified_at is null
+for update`,
+		tokenHash,
+	).Scan(&verificationID, &userID, &expiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidMagicLink
+		}
+		return err
+	}
+
+	if !expiresAt.After(now) {
+		return ErrVerificationExpired
+	}
+
+	if _, err = tx.Exec(ctx, `update email_verifications set verified_at=now() where id=$1`, verificationID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `update users set status=1,email_verified_at=coalesce(email_verified_at,now()),updated_at=now() where id=$1`, userID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CleanupPendingRegistration(ctx context.Context, userID string) error {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	if _, err = tx.Exec(ctx, `delete from email_records where user_id=$1`, userID); err != nil {
+		return err
+	}
+	ct, err := tx.Exec(ctx, `delete from users where id=$1 and status=0 and email_verified_at is null`, userID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrPendingRegistrationGone
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName string, bcryptCost int) (*BootstrapResult, error) {
@@ -240,4 +437,60 @@ func (s *Store) EnsureUserInTenant(ctx context.Context, userID, tenantID string)
 		return ErrNotInTenant
 	}
 	return nil
+}
+
+func insertRegisteredUserWithPassword(ctx context.Context, tx pgx.Tx, userID, emailAddr, password string, bcryptCost int) error {
+	hashedPassword, err := crypto.HashPassword(password, bcryptCost)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `insert into users(id,email,status,created_at,updated_at) values($1,$2,0,now(),now())`, userID, emailAddr); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `insert into user_password_credentials(user_id,password_hash,updated_at) values($1,$2,now())`, userID, hashedPassword); err != nil {
+		return err
+	}
+	return nil
+}
+
+func createVerificationTx(ctx context.Context, tx pgx.Tx, params CreateVerificationParams) (string, error) {
+	var recipientEmail string
+	if err := tx.QueryRow(ctx, `select email from users where id=$1`, params.UserID).Scan(&recipientEmail); err != nil {
+		return "", err
+	}
+
+	otpHash := email.HashToken(params.OTP)
+	magicLinkHash := email.HashToken(params.MagicToken)
+	if _, err := tx.Exec(
+		ctx,
+		`insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at) values($1,$2,$3,'otp',$4,now())`,
+		uuid.NewString(),
+		params.UserID,
+		otpHash,
+		params.ExpiresAt,
+	); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(
+		ctx,
+		`insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at) values($1,$2,$3,'magic_link',$4,now())`,
+		uuid.NewString(),
+		params.UserID,
+		magicLinkHash,
+		params.ExpiresAt,
+	); err != nil {
+		return "", err
+	}
+
+	emailRecordID := uuid.NewString()
+	if _, err := tx.Exec(
+		ctx,
+		`insert into email_records(id,user_id,to_email,template,subject,status,created_at,updated_at) values($1,$2,$3,'verification_email','Verify your email','queued',now(),now())`,
+		emailRecordID,
+		params.UserID,
+		recipientEmail,
+	); err != nil {
+		return "", err
+	}
+	return emailRecordID, nil
 }

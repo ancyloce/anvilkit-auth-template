@@ -24,6 +24,17 @@ type RegisterResponse struct {
 	User UserSummary `json:"user"`
 }
 
+// Verify email
+
+type VerifyEmailRequest struct {
+	Email string `json:"email" binding:"required"`
+	OTP   string `json:"otp" binding:"required"`
+}
+
+type VerifyEmailResponse struct {
+	Message string `json:"message"`
+}
+
 // Login
 
 type LoginRequest struct {

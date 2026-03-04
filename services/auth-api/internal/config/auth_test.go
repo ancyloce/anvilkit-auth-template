@@ -54,6 +54,7 @@ func TestLoadAuthConfigFromEnvSuccess(t *testing.T) {
 	t.Setenv("BCRYPT_COST", "13")
 	t.Setenv("LOGIN_FAIL_LIMIT", "7")
 	t.Setenv("LOGIN_FAIL_WINDOW_MIN", "30")
+	t.Setenv("AUTH_PUBLIC_BASE_URL", "https://auth.example.com")
 
 	cfg, err := LoadAuthConfigFromEnv()
 	if err != nil {
@@ -76,6 +77,22 @@ func TestLoadAuthConfigFromEnvSuccess(t *testing.T) {
 	}
 	if cfg.LoginFailWindow != 30*time.Minute {
 		t.Fatalf("LoginFailWindow = %v, want %v", cfg.LoginFailWindow, 30*time.Minute)
+	}
+	if cfg.PublicBaseURL != "https://auth.example.com" {
+		t.Fatalf("PublicBaseURL = %q, want %q", cfg.PublicBaseURL, "https://auth.example.com")
+	}
+}
+
+func TestLoadAuthConfigFromEnvInvalidPublicBaseURL(t *testing.T) {
+	setRequiredAuthEnv(t)
+	t.Setenv("AUTH_PUBLIC_BASE_URL", "javascript:alert(1)")
+
+	_, err := LoadAuthConfigFromEnv()
+	if err == nil {
+		t.Fatal("LoadAuthConfigFromEnv() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "AUTH_PUBLIC_BASE_URL") {
+		t.Fatalf("LoadAuthConfigFromEnv() error = %q, want mention AUTH_PUBLIC_BASE_URL", err)
 	}
 }
 

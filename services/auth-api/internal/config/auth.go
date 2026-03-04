@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -15,12 +16,14 @@ const (
 	defaultBcryptCost       = 12
 	defaultLoginFailLimit   = 5
 	defaultLoginFailWindowM = 10
+	defaultPublicBaseURL    = "http://localhost:8080"
 )
 
 type AuthConfig struct {
 	JWTIssuer       string
 	JWTAudience     string
 	JWTSecret       string
+	PublicBaseURL   string
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
 	PasswordMinLen  int
@@ -70,11 +73,16 @@ func LoadAuthConfigFromEnv() (AuthConfig, error) {
 	if err != nil {
 		return AuthConfig{}, err
 	}
+	publicBaseURL, err := getPublicBaseURLFromEnv("AUTH_PUBLIC_BASE_URL", defaultPublicBaseURL)
+	if err != nil {
+		return AuthConfig{}, err
+	}
 
 	return AuthConfig{
 		JWTIssuer:       issuer,
 		JWTAudience:     audience,
 		JWTSecret:       secret,
+		PublicBaseURL:   publicBaseURL,
 		AccessTTL:       time.Duration(accessTTLMin) * time.Minute,
 		RefreshTTL:      time.Duration(refreshTTLHours) * time.Hour,
 		PasswordMinLen:  passwordMinLen,
@@ -97,4 +105,21 @@ func getPositiveIntFromEnv(key string, def int) (int, error) {
 		return 0, fmt.Errorf("%s must be greater than 0", key)
 	}
 	return value, nil
+}
+
+func getPublicBaseURLFromEnv(key, def string) (string, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		raw = def
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || !parsed.IsAbs() || strings.TrimSpace(parsed.Host) == "" {
+		return "", fmt.Errorf("%s must be an absolute URL with host", key)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("%s scheme must be http or https", key)
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
 }

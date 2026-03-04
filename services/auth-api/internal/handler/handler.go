@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/mail"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,15 +18,35 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
+	commonemail "anvilkit-auth-template/modules/common-go/pkg/email"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/resp"
+	"anvilkit-auth-template/modules/common-go/pkg/queue"
 	"anvilkit-auth-template/modules/common-go/pkg/util"
 	"anvilkit-auth-template/services/auth-api/internal/auth/crypto"
 	"anvilkit-auth-template/services/auth-api/internal/handler/dto"
 	"anvilkit-auth-template/services/auth-api/internal/store"
 )
 
-const userStatusActive int16 = 1
+const (
+	userStatusActive            int16 = 1
+	emailQueueName                    = "email:send"
+	verificationTTL                   = 15 * time.Minute
+	verificationEmailSubject          = "Verify your email"
+	verificationAcceptedMessage       = "registration accepted, please check your email for verification"
+)
+
+var otpCodePattern = regexp.MustCompile(`^\d{6}$`)
+
+type emailSendJob struct {
+	RecordID  string `json:"record_id"`
+	To        string `json:"to"`
+	Subject   string `json:"subject"`
+	HTMLBody  string `json:"html_body"`
+	TextBody  string `json:"text_body"`
+	OTP       string `json:"otp"`
+	MagicLink string `json:"magic_link"`
+}
 
 type Handler struct {
 	Store           *store.Store
@@ -31,6 +54,7 @@ type Handler struct {
 	JWTIssuer       string
 	JWTAudience     string
 	JWTSecret       string
+	PublicBaseURL   string
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
 	PasswordMinLen  int
@@ -99,19 +123,143 @@ func (h *Handler) Register(c *gin.Context) error {
 	if len(req.Password) < h.PasswordMinLen {
 		return apperr.BadRequest(fmt.Errorf("password_too_short"))
 	}
-	user, err := h.Store.Register(c, email, req.Password, h.BcryptCost)
+	otp, err := commonemail.GenerateOTP()
 	if err != nil {
 		return err
 	}
-	c.JSON(http.StatusCreated, resp.Envelope{
+	magicToken, err := commonemail.GenerateMagicToken()
+	if err != nil {
+		return err
+	}
+	expiresAt := time.Now().Add(verificationTTL)
+	registered, err := h.Store.RegisterWithVerification(c, email, req.Password, h.BcryptCost, otp, magicToken, expiresAt)
+	if err != nil {
+		return err
+	}
+
+	magicLink := buildMagicLink(h.PublicBaseURL, magicToken)
+	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
+	if h.Redis == nil {
+		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
+			return fmt.Errorf("redis unavailable; cleanup pending registration: %v", cleanupErr)
+		}
+		return errors.New("redis_unavailable")
+	}
+	q, err := queue.New(h.Redis)
+	if err != nil {
+		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
+			return fmt.Errorf("init queue: %w; cleanup pending registration: %v", err, cleanupErr)
+		}
+		return err
+	}
+	if err := q.EnqueueContext(c, emailQueueName, emailSendJob{
+		RecordID:  registered.EmailRecordID,
+		To:        registered.User.Email,
+		Subject:   verificationEmailSubject,
+		HTMLBody:  htmlBody,
+		TextBody:  textBody,
+		OTP:       otp,
+		MagicLink: magicLink,
+	}); err != nil {
+		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
+			return fmt.Errorf("enqueue verification email job: %w; cleanup pending registration: %v", err, cleanupErr)
+		}
+		return err
+	}
+
+	c.JSON(http.StatusAccepted, resp.Envelope{
 		RequestID: c.GetString("request_id"),
 		Code:      0,
-		Message:   "ok",
+		Message:   verificationAcceptedMessage,
 		Data: dto.RegisterResponse{
-			User: dto.UserSummary{ID: user.ID, Email: user.Email},
+			User: dto.UserSummary{ID: registered.User.ID, Email: registered.User.Email},
 		},
 	})
 	return nil
+}
+
+func (h *Handler) VerifyEmail(c *gin.Context) error {
+	var req dto.VerifyEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		return apperr.BadRequest(err)
+	}
+
+	emailAddr := strings.TrimSpace(strings.ToLower(req.Email))
+	if _, err := mail.ParseAddress(emailAddr); err != nil {
+		return apperr.BadRequest(fmt.Errorf("invalid_email"))
+	}
+	otp := strings.TrimSpace(req.OTP)
+	if !otpCodePattern.MatchString(otp) {
+		return apperr.BadRequest(errors.New("invalid_otp")).WithData(map[string]any{"reason": "invalid_otp"})
+	}
+
+	if err := h.Store.VerifyEmailOTP(c, emailAddr, otp, time.Now()); err != nil {
+		if errors.Is(err, store.ErrInvalidVerificationOTP) {
+			return apperr.BadRequest(err).WithData(map[string]any{"reason": "invalid_otp"})
+		}
+		if errors.Is(err, store.ErrVerificationExpired) {
+			return apperr.BadRequest(err).WithData(map[string]any{"reason": "expired_otp"})
+		}
+		return err
+	}
+
+	resp.OK(c, dto.VerifyEmailResponse{Message: "Email verified successfully"})
+	return nil
+}
+
+func (h *Handler) VerifyMagicLink(c *gin.Context) error {
+	token := strings.TrimSpace(c.Query("token"))
+	if token == "" {
+		return apperr.BadRequest(errors.New("invalid_magic_link")).WithData(map[string]any{"reason": "invalid_magic_link"})
+	}
+
+	if err := h.Store.VerifyMagicLinkToken(c, token, time.Now()); err != nil {
+		if errors.Is(err, store.ErrInvalidMagicLink) {
+			return apperr.BadRequest(err).WithData(map[string]any{"reason": "invalid_magic_link"})
+		}
+		if errors.Is(err, store.ErrVerificationExpired) {
+			return apperr.BadRequest(err).WithData(map[string]any{"reason": "expired_magic_link"})
+		}
+		return err
+	}
+
+	resp.OK(c, dto.VerifyEmailResponse{Message: "Email verified successfully"})
+	return nil
+}
+
+func buildMagicLink(publicBaseURL, token string) string {
+	baseURL := strings.TrimSpace(publicBaseURL)
+	if baseURL == "" {
+		baseURL = "http://localhost:8080"
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || !u.IsAbs() || strings.TrimSpace(u.Host) == "" {
+		u = &url.URL{Scheme: "http", Host: "localhost:8080"}
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/auth/verify-magic-link"
+	query := url.Values{}
+	query.Set("token", token)
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func buildVerificationEmailBody(otp, magicLink string) (string, string) {
+	safeOTP := html.EscapeString(otp)
+	safeMagicLink := html.EscapeString(magicLink)
+	htmlBody := fmt.Sprintf(
+		`<p>Use this verification code: <strong>%s</strong></p><p>Or verify with this magic link: <a href="%s">%s</a></p>`,
+		safeOTP,
+		safeMagicLink,
+		safeMagicLink,
+	)
+	textBody := fmt.Sprintf(
+		"Use this verification code: %s\nVerify with this magic link: %s",
+		otp,
+		magicLink,
+	)
+	return htmlBody, textBody
 }
 
 func (h *Handler) Login(c *gin.Context) error {

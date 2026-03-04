@@ -2,29 +2,51 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	goredis "github.com/redis/go-redis/v9"
 
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
-	"anvilkit-auth-template/services/auth-api/internal/store"
+	"anvilkit-auth-template/modules/common-go/pkg/queue"
 	"anvilkit-auth-template/services/auth-api/internal/testutil"
 )
 
+var otpPattern = regexp.MustCompile(`^\d{6}$`)
+
+type queuedEmailJob struct {
+	RecordID  string `json:"record_id"`
+	To        string `json:"to"`
+	Subject   string `json:"subject"`
+	HTMLBody  string `json:"html_body"`
+	TextBody  string `json:"text_body"`
+	OTP       string `json:"otp"`
+	MagicLink string `json:"magic_link"`
+}
+
 func TestRegisterSuccess(t *testing.T) {
 	db := newTestDB(t)
+	rdb := newTestRedis(t)
 	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
 
-	r := newRegisterRouter(db, 8)
+	r := newRegisterRouter(t, db, rdb, 8)
+	start := time.Now()
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
 		"email":    "user1@example.com",
 		"password": "Passw0rd!",
 	})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d; body = %s", res.Code, http.StatusCreated, res.Body.String())
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body = %s", res.Code, http.StatusAccepted, res.Body.String())
 	}
 
 	var body struct {
@@ -38,7 +60,7 @@ func TestRegisterSuccess(t *testing.T) {
 		} `json:"data"`
 	}
 	decodeResponse(t, res, &body)
-	if body.Code != 0 || body.Message != "ok" {
+	if body.Code != 0 || body.Message != verificationAcceptedMessage {
 		t.Fatalf("unexpected envelope: %+v", body)
 	}
 	if body.Data.User.ID == "" {
@@ -48,27 +70,111 @@ func TestRegisterSuccess(t *testing.T) {
 		t.Fatalf("user.email = %q, want %q", body.Data.User.Email, "user1@example.com")
 	}
 
-	var usersCount, credCount int
-	if err := db.QueryRow(context.Background(), "select count(1) from users where email=$1", "user1@example.com").Scan(&usersCount); err != nil {
-		t.Fatalf("query users count: %v", err)
+	var (
+		userID    string
+		status    int16
+		credCount int
+	)
+	if err := db.QueryRow(context.Background(), "select id,status from users where email=$1", "user1@example.com").Scan(&userID, &status); err != nil {
+		t.Fatalf("query user: %v", err)
+	}
+	if status != 0 {
+		t.Fatalf("user status=%d want=0", status)
 	}
 	if err := db.QueryRow(context.Background(), "select count(1) from user_password_credentials").Scan(&credCount); err != nil {
 		t.Fatalf("query credential count: %v", err)
 	}
-	if usersCount != 1 || credCount != 1 {
-		t.Fatalf("usersCount=%d credCount=%d, want both 1", usersCount, credCount)
+	if credCount != 1 {
+		t.Fatalf("credCount=%d want=1", credCount)
+	}
+
+	rows, err := db.Query(context.Background(), `select token_type,token_hash,expires_at from email_verifications where user_id=$1`, userID)
+	if err != nil {
+		t.Fatalf("query email_verifications: %v", err)
+	}
+	defer rows.Close()
+	tokenTypes := map[string]bool{}
+	verificationCount := 0
+	for rows.Next() {
+		var tokenType string
+		var tokenHash string
+		var expiresAt time.Time
+		if err := rows.Scan(&tokenType, &tokenHash, &expiresAt); err != nil {
+			t.Fatalf("scan email_verifications: %v", err)
+		}
+		verificationCount++
+		tokenTypes[tokenType] = true
+		if len(tokenHash) != 64 {
+			t.Fatalf("token_hash length=%d want=64", len(tokenHash))
+		}
+		minExpiry := start.Add(14 * time.Minute)
+		maxExpiry := time.Now().Add(16 * time.Minute)
+		if expiresAt.Before(minExpiry) || expiresAt.After(maxExpiry) {
+			t.Fatalf("expires_at=%s outside expected range [%s,%s]", expiresAt, minExpiry, maxExpiry)
+		}
+	}
+	if rows.Err() != nil {
+		t.Fatalf("iterate email_verifications: %v", rows.Err())
+	}
+	if verificationCount != 2 || !tokenTypes["otp"] || !tokenTypes["magic_link"] {
+		t.Fatalf("verification rows=%d tokenTypes=%v want rows=2 with otp+magic_link", verificationCount, tokenTypes)
+	}
+
+	var (
+		emailRecordID string
+		toEmail       string
+		template      string
+		subject       string
+		recordStatus  string
+	)
+	if err := db.QueryRow(context.Background(), `
+select id,to_email,template,subject,status
+from email_records
+where user_id=$1`, userID).Scan(&emailRecordID, &toEmail, &template, &subject, &recordStatus); err != nil {
+		t.Fatalf("query email_records: %v", err)
+	}
+	if toEmail != "user1@example.com" || template != "verification_email" || subject != verificationEmailSubject || recordStatus != "queued" {
+		t.Fatalf("unexpected email record: to=%q template=%q subject=%q status=%q", toEmail, template, subject, recordStatus)
+	}
+
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	if job.RecordID != emailRecordID {
+		t.Fatalf("job record_id=%q want=%q", job.RecordID, emailRecordID)
+	}
+	if job.To != "user1@example.com" {
+		t.Fatalf("job to=%q want user1@example.com", job.To)
+	}
+	if !otpPattern.MatchString(job.OTP) {
+		t.Fatalf("job otp=%q should be a 6-digit numeric code", job.OTP)
+	}
+	if job.MagicLink == "" || !regexp.MustCompile(`/api/v1/auth/verify-magic-link\?token=`).MatchString(job.MagicLink) {
+		t.Fatalf("job magic_link=%q missing verify endpoint/token", job.MagicLink)
+	}
+	if !containsAll(job.TextBody, job.OTP, job.MagicLink) {
+		t.Fatalf("text_body missing OTP or magic link: %q", job.TextBody)
+	}
+	if !containsAll(job.HTMLBody, job.OTP, job.MagicLink) {
+		t.Fatalf("html_body missing OTP or magic link: %q", job.HTMLBody)
 	}
 }
 
 func TestRegisterDuplicateEmail(t *testing.T) {
 	db := newTestDB(t)
+	rdb := newTestRedis(t)
 	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
 
-	r := newRegisterRouter(db, 8)
-	performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+	r := newRegisterRouter(t, db, rdb, 8)
+	first := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
 		"email":    "dup@example.com",
 		"password": "Passw0rd!",
 	})
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first register status = %d, want %d; body = %s", first.Code, http.StatusAccepted, first.Body.String())
+	}
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
 		"email":    "dup@example.com",
 		"password": "Passw0rd!",
@@ -84,13 +190,27 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	if body.Code != errcode.Conflict || body.Message != "conflict" {
 		t.Fatalf("unexpected conflict response: %+v", body)
 	}
+
+	q, err := queue.New(rdb)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+	n, err := q.QueueLength(emailQueueName)
+	if err != nil {
+		t.Fatalf("queue length: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("queue length=%d want=1", n)
+	}
 }
 
 func TestRegisterWeakPassword(t *testing.T) {
 	db := newTestDB(t)
+	rdb := newTestRedis(t)
 	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
 
-	r := newRegisterRouter(db, 10)
+	r := newRegisterRouter(t, db, rdb, 10)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
 		"email":    "weak@example.com",
 		"password": "short",
@@ -114,13 +234,258 @@ func TestRegisterWeakPassword(t *testing.T) {
 	if usersCount != 0 {
 		t.Fatalf("usersCount = %d, want 0", usersCount)
 	}
+
+	q, err := queue.New(rdb)
+	if err != nil {
+		t.Fatalf("new queue: %v", err)
+	}
+	n, err := q.QueueLength(emailQueueName)
+	if err != nil {
+		t.Fatalf("queue length: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("queue length=%d want=0", n)
+	}
 }
 
-func newRegisterRouter(db *pgxpool.Pool, passwordMinLen int) *gin.Engine {
+func TestRegisterVerifyEmailThenLogin(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
+
+	r := newRegisterRouter(t, db, rdb, 8)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "activate@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", res.Code, http.StatusAccepted, res.Body.String())
+	}
+
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+
+	verifyRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "activate@example.com",
+		"otp":   job.OTP,
+	})
+	if verifyRes.Code != http.StatusOK {
+		t.Fatalf("verify status=%d want=%d body=%s", verifyRes.Code, http.StatusOK, verifyRes.Body.String())
+	}
+	var verifyBody struct {
+		Code int `json:"code"`
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	decodeResponse(t, verifyRes, &verifyBody)
+	if verifyBody.Code != 0 || verifyBody.Data.Message != "Email verified successfully" {
+		t.Fatalf("unexpected verify response: %+v", verifyBody)
+	}
+
+	var status int16
+	var emailVerifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `select status,email_verified_at from users where email=$1`, "activate@example.com").Scan(&status, &emailVerifiedAt); err != nil {
+		t.Fatalf("query user after verify: %v", err)
+	}
+	if status != 1 {
+		t.Fatalf("status=%d want=1", status)
+	}
+	if emailVerifiedAt == nil {
+		t.Fatal("email_verified_at should be set after verification")
+	}
+
+	loginRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
+		"email":    "activate@example.com",
+		"password": "Passw0rd!",
+	})
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("login status=%d want=%d body=%s", loginRes.Code, http.StatusOK, loginRes.Body.String())
+	}
+}
+
+func TestRegisterQueueUnavailableCleansUpPendingUser(t *testing.T) {
+	db := newTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	r := newRegisterRouter(t, db, nil, 8)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "queue-down@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want=%d body=%s", res.Code, http.StatusInternalServerError, res.Body.String())
+	}
+
+	var body struct {
+		Code int `json:"code"`
+	}
+	decodeResponse(t, res, &body)
+	if body.Code != errcode.InternalError {
+		t.Fatalf("code=%d want=%d", body.Code, errcode.InternalError)
+	}
+
+	var usersCount int
+	if err := db.QueryRow(context.Background(), `select count(1) from users where email=$1`, "queue-down@example.com").Scan(&usersCount); err != nil {
+		t.Fatalf("query users: %v", err)
+	}
+	if usersCount != 0 {
+		t.Fatalf("users count=%d want=0", usersCount)
+	}
+
+	var verificationsCount int
+	if err := db.QueryRow(context.Background(), `
+select count(1)
+from email_verifications ev
+join users u on u.id=ev.user_id
+where u.email=$1`, "queue-down@example.com").Scan(&verificationsCount); err != nil {
+		t.Fatalf("query email_verifications: %v", err)
+	}
+	if verificationsCount != 0 {
+		t.Fatalf("email_verifications count=%d want=0", verificationsCount)
+	}
+
+	var recordsCount int
+	if err := db.QueryRow(context.Background(), `select count(1) from email_records where to_email=$1`, "queue-down@example.com").Scan(&recordsCount); err != nil {
+		t.Fatalf("query email_records: %v", err)
+	}
+	if recordsCount != 0 {
+		t.Fatalf("email_records count=%d want=0", recordsCount)
+	}
+}
+
+func TestRegisterVerifyMagicLinkThenLogin(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
+
+	r := newRegisterRouter(t, db, rdb, 8)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "magic-activate@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", res.Code, http.StatusAccepted, res.Body.String())
+	}
+
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	parsedLink, err := url.Parse(job.MagicLink)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	token := parsedLink.Query().Get("token")
+	if token == "" {
+		t.Fatalf("magic link token missing: %s", job.MagicLink)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify-magic-link?token="+url.QueryEscape(token), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("verify-magic-link status=%d want=%d body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var verifyBody struct {
+		Code int `json:"code"`
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	decodeResponse(t, w, &verifyBody)
+	if verifyBody.Code != 0 || verifyBody.Data.Message != "Email verified successfully" {
+		t.Fatalf("unexpected verify-magic-link response: %+v", verifyBody)
+	}
+
+	loginRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
+		"email":    "magic-activate@example.com",
+		"password": "Passw0rd!",
+	})
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("login status=%d want=%d body=%s", loginRes.Code, http.StatusOK, loginRes.Body.String())
+	}
+}
+
+func TestBuildVerificationEmailBodyEscapesHTML(t *testing.T) {
+	otp := `12<34>`
+	magicLink := `http://example.com/verify?token="><script>alert(1)</script>`
+	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
+
+	if strings.Contains(htmlBody, `<script>alert(1)</script>`) {
+		t.Fatalf("html body should escape script tag: %s", htmlBody)
+	}
+	if !strings.Contains(htmlBody, `&lt;script&gt;alert(1)&lt;/script&gt;`) {
+		t.Fatalf("html body should contain escaped script text: %s", htmlBody)
+	}
+	if strings.Contains(htmlBody, `<strong>12<34></strong>`) {
+		t.Fatalf("html body should escape OTP value: %s", htmlBody)
+	}
+	if !strings.Contains(htmlBody, `<strong>12&lt;34&gt;</strong>`) {
+		t.Fatalf("html body should contain escaped OTP value: %s", htmlBody)
+	}
+
+	// Plain-text body remains unescaped intentionally for readability.
+	if !strings.Contains(textBody, otp) || !strings.Contains(textBody, magicLink) {
+		t.Fatalf("text body should include original OTP and link: %s", textBody)
+	}
+}
+
+func TestBuildMagicLinkUsesConfiguredPublicBaseURL(t *testing.T) {
+	link := buildMagicLink("https://auth.example.com", "abc123")
+	want := "https://auth.example.com/api/v1/auth/verify-magic-link?token=abc123"
+	if link != want {
+		t.Fatalf("magic link=%q want=%q", link, want)
+	}
+}
+
+func TestBuildMagicLinkSupportsBasePathAndIgnoresFragments(t *testing.T) {
+	link := buildMagicLink("https://example.com/auth/public?foo=bar#frag", "tok")
+	want := "https://example.com/auth/public/api/v1/auth/verify-magic-link?token=tok"
+	if link != want {
+		t.Fatalf("magic link=%q want=%q", link, want)
+	}
+}
+
+func popQueuedJob(t *testing.T, rdb *goredis.Client) (queuedEmailJob, error) {
+	t.Helper()
+	raw, err := rdb.LPop(context.Background(), emailQueueName).Result()
+	if err != nil {
+		return queuedEmailJob{}, err
+	}
+	var job queuedEmailJob
+	if err := json.Unmarshal([]byte(raw), &job); err != nil {
+		return queuedEmailJob{}, err
+	}
+	return job, nil
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
+
+func newRegisterRouter(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client, passwordMinLen int) *gin.Engine {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(ginmid.RequestID(), ginmid.ErrorHandler())
-	h := &Handler{Store: &store.Store{DB: db}, PasswordMinLen: passwordMinLen, BcryptCost: 4}
+	h := newTestAuthHandler(t, db, rdb)
+	h.PasswordMinLen = passwordMinLen
+	h.BcryptCost = 4
 	r.POST("/v1/auth/register", ginmid.Wrap(h.Register))
+	r.POST("/v1/auth/verify-email", ginmid.Wrap(h.VerifyEmail))
+	r.GET("/v1/auth/verify-magic-link", ginmid.Wrap(h.VerifyMagicLink))
+	r.POST("/v1/auth/login", func(c *gin.Context) { c.Request.RemoteAddr = "192.0.2.1:12345"; ginmid.Wrap(h.Login)(c) })
 	return r
 }
