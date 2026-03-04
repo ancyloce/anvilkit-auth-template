@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -33,6 +34,8 @@ const (
 	verificationEmailSubject          = "Verify your email"
 	verificationAcceptedMessage       = "registration accepted, please check your email for verification"
 )
+
+var otpCodePattern = regexp.MustCompile(`^\d{6}$`)
 
 type emailSendJob struct {
 	RecordID  string `json:"record_id"`
@@ -168,6 +171,35 @@ func (h *Handler) Register(c *gin.Context) error {
 			User: dto.UserSummary{ID: user.ID, Email: user.Email},
 		},
 	})
+	return nil
+}
+
+func (h *Handler) VerifyEmail(c *gin.Context) error {
+	var req dto.VerifyEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		return apperr.BadRequest(err)
+	}
+
+	emailAddr := strings.TrimSpace(strings.ToLower(req.Email))
+	if _, err := mail.ParseAddress(emailAddr); err != nil {
+		return apperr.BadRequest(fmt.Errorf("invalid_email"))
+	}
+	otp := strings.TrimSpace(req.OTP)
+	if !otpCodePattern.MatchString(otp) {
+		return apperr.BadRequest(errors.New("invalid_otp")).WithData(map[string]any{"reason": "invalid_otp"})
+	}
+
+	if err := h.Store.VerifyEmailOTP(c, emailAddr, otp, time.Now()); err != nil {
+		if errors.Is(err, store.ErrInvalidVerificationOTP) {
+			return apperr.BadRequest(err).WithData(map[string]any{"reason": "invalid_otp"})
+		}
+		if errors.Is(err, store.ErrVerificationExpired) {
+			return apperr.BadRequest(err).WithData(map[string]any{"reason": "expired_otp"})
+		}
+		return err
+	}
+
+	resp.OK(c, dto.VerifyEmailResponse{Message: "Email verified successfully"})
 	return nil
 }
 

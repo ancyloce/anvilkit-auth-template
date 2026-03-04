@@ -16,7 +16,6 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
 	"anvilkit-auth-template/modules/common-go/pkg/queue"
-	"anvilkit-auth-template/services/auth-api/internal/store"
 	"anvilkit-auth-template/services/auth-api/internal/testutil"
 )
 
@@ -38,7 +37,7 @@ func TestRegisterSuccess(t *testing.T) {
 	testutil.TruncateAuthTables(t, db)
 	testutil.FlushRedisKeys(t, rdb, emailQueueName)
 
-	r := newRegisterRouter(db, rdb, 8)
+	r := newRegisterRouter(t, db, rdb, 8)
 	start := time.Now()
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
 		"email":    "user1@example.com",
@@ -166,7 +165,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	testutil.TruncateAuthTables(t, db)
 	testutil.FlushRedisKeys(t, rdb, emailQueueName)
 
-	r := newRegisterRouter(db, rdb, 8)
+	r := newRegisterRouter(t, db, rdb, 8)
 	first := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
 		"email":    "dup@example.com",
 		"password": "Passw0rd!",
@@ -209,7 +208,7 @@ func TestRegisterWeakPassword(t *testing.T) {
 	testutil.TruncateAuthTables(t, db)
 	testutil.FlushRedisKeys(t, rdb, emailQueueName)
 
-	r := newRegisterRouter(db, rdb, 10)
+	r := newRegisterRouter(t, db, rdb, 10)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
 		"email":    "weak@example.com",
 		"password": "short",
@@ -247,6 +246,66 @@ func TestRegisterWeakPassword(t *testing.T) {
 	}
 }
 
+func TestRegisterVerifyEmailThenLogin(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
+
+	r := newRegisterRouter(t, db, rdb, 8)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "activate@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", res.Code, http.StatusAccepted, res.Body.String())
+	}
+
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+
+	verifyRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "activate@example.com",
+		"otp":   job.OTP,
+	})
+	if verifyRes.Code != http.StatusOK {
+		t.Fatalf("verify status=%d want=%d body=%s", verifyRes.Code, http.StatusOK, verifyRes.Body.String())
+	}
+	var verifyBody struct {
+		Code int `json:"code"`
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	decodeResponse(t, verifyRes, &verifyBody)
+	if verifyBody.Code != 0 || verifyBody.Data.Message != "Email verified successfully" {
+		t.Fatalf("unexpected verify response: %+v", verifyBody)
+	}
+
+	var status int16
+	var emailVerifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `select status,email_verified_at from users where email=$1`, "activate@example.com").Scan(&status, &emailVerifiedAt); err != nil {
+		t.Fatalf("query user after verify: %v", err)
+	}
+	if status != 1 {
+		t.Fatalf("status=%d want=1", status)
+	}
+	if emailVerifiedAt == nil {
+		t.Fatal("email_verified_at should be set after verification")
+	}
+
+	loginRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
+		"email":    "activate@example.com",
+		"password": "Passw0rd!",
+	})
+	if loginRes.Code != http.StatusOK {
+		t.Fatalf("login status=%d want=%d body=%s", loginRes.Code, http.StatusOK, loginRes.Body.String())
+	}
+}
+
 func popQueuedJob(t *testing.T, rdb *goredis.Client) (queuedEmailJob, error) {
 	t.Helper()
 	raw, err := rdb.LPop(context.Background(), emailQueueName).Result()
@@ -269,11 +328,16 @@ func containsAll(s string, subs ...string) bool {
 	return true
 }
 
-func newRegisterRouter(db *pgxpool.Pool, rdb *goredis.Client, passwordMinLen int) *gin.Engine {
+func newRegisterRouter(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client, passwordMinLen int) *gin.Engine {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(ginmid.RequestID(), ginmid.ErrorHandler())
-	h := &Handler{Store: &store.Store{DB: db}, Redis: rdb, PasswordMinLen: passwordMinLen, BcryptCost: 4}
+	h := newTestAuthHandler(t, db, rdb)
+	h.PasswordMinLen = passwordMinLen
+	h.BcryptCost = 4
 	r.POST("/v1/auth/register", ginmid.Wrap(h.Register))
+	r.POST("/v1/auth/verify-email", ginmid.Wrap(h.VerifyEmail))
+	r.POST("/v1/auth/login", func(c *gin.Context) { c.Request.RemoteAddr = "192.0.2.1:12345"; ginmid.Wrap(h.Login)(c) })
 	return r
 }

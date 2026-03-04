@@ -96,6 +96,59 @@ where id=$1`, res.EmailRecordID).Scan(&recordEmail, &recordStatus, &recordSubjec
 	}
 }
 
+func TestStoreVerifyEmailOTPPromotesPendingUser(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-otp-user"
+	emailAddr := "store-otp@example.com"
+	_, err := db.Exec(context.Background(), `insert into users(id,email,status,created_at,updated_at) values($1,$2,0,now(),now())`, userID, emailAddr)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	otp := "654321"
+	exp := time.Now().Add(15 * time.Minute)
+	_, err = db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at)
+values($1,$2,$3,'otp',$4,now())`,
+		"verify-otp-row",
+		userID,
+		commonemail.HashToken(otp),
+		exp,
+	)
+	if err != nil {
+		t.Fatalf("insert email verification: %v", err)
+	}
+
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	if err := s.VerifyEmailOTP(ctx, emailAddr, otp, time.Now()); err != nil {
+		t.Fatalf("VerifyEmailOTP: %v", err)
+	}
+
+	var status int16
+	var emailVerifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `select status,email_verified_at from users where id=$1`, userID).Scan(&status, &emailVerifiedAt); err != nil {
+		t.Fatalf("query user: %v", err)
+	}
+	if status != 1 {
+		t.Fatalf("status=%d want=1", status)
+	}
+	if emailVerifiedAt == nil {
+		t.Fatal("email_verified_at should be set")
+	}
+
+	var verifiedAt *time.Time
+	if err := db.QueryRow(context.Background(), `select verified_at from email_verifications where id='verify-otp-row'`).Scan(&verifiedAt); err != nil {
+		t.Fatalf("query verification row: %v", err)
+	}
+	if verifiedAt == nil {
+		t.Fatal("email_verifications.verified_at should be set")
+	}
+}
+
 func TestStoreRotateRefreshTokenRevokesOldAndCreatesNew(t *testing.T) {
 	db := testutil.MustTestDB(t)
 	testutil.TruncateAuthTables(t, db)

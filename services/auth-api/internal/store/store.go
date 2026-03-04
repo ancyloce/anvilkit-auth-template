@@ -24,6 +24,8 @@ var (
 	ErrBootstrapPasswordMismatch = errors.New("bootstrap_password_mismatch")
 	ErrTenantNameConflict        = errors.New("tenant_name_conflict")
 	ErrNotInTenant               = errors.New("not_in_tenant")
+	ErrInvalidVerificationOTP    = errors.New("invalid_verification_otp")
+	ErrVerificationExpired       = errors.New("verification_expired")
 )
 
 type BootstrapResult struct {
@@ -134,6 +136,56 @@ func (s *Store) CreateVerification(ctx context.Context, params CreateVerificatio
 		return nil, err
 	}
 	return &CreateVerificationResult{EmailRecordID: emailRecordID}, nil
+}
+
+func (s *Store) VerifyEmailOTP(ctx context.Context, emailAddr, otp string, now time.Time) error {
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	tokenHash := email.HashToken(otp)
+	var (
+		verificationID string
+		userID         string
+		expiresAt      time.Time
+	)
+	err = tx.QueryRow(ctx, `
+select ev.id, ev.user_id, ev.expires_at
+from email_verifications ev
+join users u on u.id = ev.user_id
+where u.email = $1
+  and ev.token_type = 'otp'
+  and ev.token_hash = $2
+  and ev.verified_at is null
+for update`,
+		emailAddr,
+		tokenHash,
+	).Scan(&verificationID, &userID, &expiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidVerificationOTP
+		}
+		return err
+	}
+
+	if !expiresAt.After(now) {
+		return ErrVerificationExpired
+	}
+
+	if _, err = tx.Exec(ctx, `update email_verifications set verified_at=now() where id=$1`, verificationID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `update users set status=1,email_verified_at=coalesce(email_verified_at,now()),updated_at=now() where id=$1`, userID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName string, bcryptCost int) (*BootstrapResult, error) {

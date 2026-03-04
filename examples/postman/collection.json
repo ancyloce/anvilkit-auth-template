@@ -23,6 +23,14 @@
     {
       "key": "tenant_id",
       "value": ""
+    },
+    {
+      "key": "register_email",
+      "value": "register@example.com"
+    },
+    {
+      "key": "verification_otp",
+      "value": "123456"
     }
   ],
   "item": [
@@ -69,7 +77,7 @@
         "url": "{{base_url_auth}}/api/v1/auth/register",
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"email\": \"register@example.com\",\n  \"password\": \"Passw0rd!\"\n}"
+          "raw": "{\n  \"email\": \"{{register_email}}\",\n  \"password\": \"Passw0rd!\"\n}"
         }
       },
       "event": [
@@ -82,6 +90,36 @@
               "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
               "pm.test('check-email message', ()=> pm.expect(b.message).to.eql('registration accepted, please check your email for verification'));",
               "pm.test('has user id', ()=> pm.expect(b.data.user.id).to.be.a('string'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "verify-email (otp)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url_auth}}/api/v1/auth/verify-email",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{register_email}}\",\n  \"otp\": \"{{verification_otp}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('status ok', ()=> pm.expect(pm.response.code).to.eql(200));",
+              "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
+              "pm.test('verification success message', ()=> pm.expect(b.data.message).to.eql('Email verified successfully'));"
             ]
           }
         }

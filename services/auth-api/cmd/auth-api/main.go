@@ -58,6 +58,7 @@ func main() {
 	v1 := r.Group("/api/v1")
 	v1.POST("/bootstrap", ginmid.RateLimit(rdb, "rl:bootstrap", 10, time.Minute), ginmid.Wrap(h.Bootstrap))
 	v1.POST("/auth/register", ginmid.RateLimit(rdb, "rl:register", 20, time.Minute), ginmid.Wrap(h.Register))
+	v1.POST("/auth/verify-email", ginmid.RateLimit(rdb, "rl:verify-email", 60, time.Minute), ginmid.Wrap(h.VerifyEmail))
 	v1.POST("/auth/login", ginmid.RateLimit(rdb, "rl:login", 30, time.Minute), ginmid.Wrap(h.Login))
 	v1.POST("/auth/refresh", ginmid.Wrap(h.Refresh))
 	v1.POST("/auth/logout", ginmid.Wrap(h.Logout))
