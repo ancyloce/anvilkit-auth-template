@@ -121,10 +121,6 @@ func (h *Handler) Register(c *gin.Context) error {
 	if len(req.Password) < h.PasswordMinLen {
 		return apperr.BadRequest(fmt.Errorf("password_too_short"))
 	}
-	user, err := h.Store.Register(c, email, req.Password, h.BcryptCost)
-	if err != nil {
-		return err
-	}
 	otp, err := commonemail.GenerateOTP()
 	if err != nil {
 		return err
@@ -134,32 +130,38 @@ func (h *Handler) Register(c *gin.Context) error {
 		return err
 	}
 	expiresAt := time.Now().Add(verificationTTL)
-	created, err := h.Store.CreateVerification(c, store.CreateVerificationParams{
-		UserID:     user.ID,
-		Email:      user.Email,
-		OTP:        otp,
-		MagicToken: magicToken,
-		ExpiresAt:  expiresAt,
-	})
+	registered, err := h.Store.RegisterWithVerification(c, email, req.Password, h.BcryptCost, otp, magicToken, expiresAt)
 	if err != nil {
 		return err
 	}
 
 	magicLink := buildMagicLink(c, magicToken)
 	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
+	if h.Redis == nil {
+		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
+			return fmt.Errorf("redis unavailable; cleanup pending registration: %v", cleanupErr)
+		}
+		return errors.New("redis_unavailable")
+	}
 	q, err := queue.New(h.Redis)
 	if err != nil {
+		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
+			return fmt.Errorf("init queue: %w; cleanup pending registration: %v", err, cleanupErr)
+		}
 		return err
 	}
 	if err := q.EnqueueContext(c, emailQueueName, emailSendJob{
-		RecordID:  created.EmailRecordID,
-		To:        user.Email,
+		RecordID:  registered.EmailRecordID,
+		To:        registered.User.Email,
 		Subject:   verificationEmailSubject,
 		HTMLBody:  htmlBody,
 		TextBody:  textBody,
 		OTP:       otp,
 		MagicLink: magicLink,
 	}); err != nil {
+		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
+			return fmt.Errorf("enqueue verification email job: %w; cleanup pending registration: %v", err, cleanupErr)
+		}
 		return err
 	}
 
@@ -168,7 +170,7 @@ func (h *Handler) Register(c *gin.Context) error {
 		Code:      0,
 		Message:   verificationAcceptedMessage,
 		Data: dto.RegisterResponse{
-			User: dto.UserSummary{ID: user.ID, Email: user.Email},
+			User: dto.UserSummary{ID: registered.User.ID, Email: registered.User.Email},
 		},
 	})
 	return nil

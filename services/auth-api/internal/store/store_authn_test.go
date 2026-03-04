@@ -149,6 +149,77 @@ values($1,$2,$3,'otp',$4,now())`,
 	}
 }
 
+func TestStoreRegisterWithVerificationAndCleanupPendingRegistration(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	res, err := s.RegisterWithVerification(
+		ctx,
+		"atomic-register@example.com",
+		"Passw0rd!",
+		4,
+		"123456",
+		"magic-atomic-token",
+		time.Now().Add(15*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("RegisterWithVerification: %v", err)
+	}
+	if res == nil || res.User.ID == "" || res.EmailRecordID == "" {
+		t.Fatalf("unexpected register-with-verification result: %+v", res)
+	}
+
+	var usersCount int
+	if err := db.QueryRow(context.Background(), `select count(1) from users where id=$1 and email=$2 and status=0`, res.User.ID, "atomic-register@example.com").Scan(&usersCount); err != nil {
+		t.Fatalf("query users: %v", err)
+	}
+	if usersCount != 1 {
+		t.Fatalf("users count=%d want=1", usersCount)
+	}
+	var verificationsCount int
+	if err := db.QueryRow(context.Background(), `select count(1) from email_verifications where user_id=$1`, res.User.ID).Scan(&verificationsCount); err != nil {
+		t.Fatalf("query email_verifications: %v", err)
+	}
+	if verificationsCount != 2 {
+		t.Fatalf("email_verifications count=%d want=2", verificationsCount)
+	}
+	var recordsCount int
+	if err := db.QueryRow(context.Background(), `select count(1) from email_records where user_id=$1`, res.User.ID).Scan(&recordsCount); err != nil {
+		t.Fatalf("query email_records: %v", err)
+	}
+	if recordsCount != 1 {
+		t.Fatalf("email_records count=%d want=1", recordsCount)
+	}
+
+	ctxCleanup, cancelCleanup := testCtx(t)
+	defer cancelCleanup()
+	if err := s.CleanupPendingRegistration(ctxCleanup, res.User.ID); err != nil {
+		t.Fatalf("CleanupPendingRegistration: %v", err)
+	}
+
+	if err := db.QueryRow(context.Background(), `select count(1) from users where id=$1`, res.User.ID).Scan(&usersCount); err != nil {
+		t.Fatalf("query users after cleanup: %v", err)
+	}
+	if usersCount != 0 {
+		t.Fatalf("users count after cleanup=%d want=0", usersCount)
+	}
+	if err := db.QueryRow(context.Background(), `select count(1) from email_verifications where user_id=$1`, res.User.ID).Scan(&verificationsCount); err != nil {
+		t.Fatalf("query email_verifications after cleanup: %v", err)
+	}
+	if verificationsCount != 0 {
+		t.Fatalf("email_verifications after cleanup=%d want=0", verificationsCount)
+	}
+	if err := db.QueryRow(context.Background(), `select count(1) from email_records where id=$1`, res.EmailRecordID).Scan(&recordsCount); err != nil {
+		t.Fatalf("query email_records after cleanup: %v", err)
+	}
+	if recordsCount != 0 {
+		t.Fatalf("email_records after cleanup=%d want=0", recordsCount)
+	}
+}
+
 func TestStoreRotateRefreshTokenRevokesOldAndCreatesNew(t *testing.T) {
 	db := testutil.MustTestDB(t)
 	testutil.TruncateAuthTables(t, db)

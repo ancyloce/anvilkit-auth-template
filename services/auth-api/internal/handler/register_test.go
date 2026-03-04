@@ -306,6 +306,56 @@ func TestRegisterVerifyEmailThenLogin(t *testing.T) {
 	}
 }
 
+func TestRegisterQueueUnavailableCleansUpPendingUser(t *testing.T) {
+	db := newTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	r := newRegisterRouter(t, db, nil, 8)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "queue-down@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d want=%d body=%s", res.Code, http.StatusInternalServerError, res.Body.String())
+	}
+
+	var body struct {
+		Code int `json:"code"`
+	}
+	decodeResponse(t, res, &body)
+	if body.Code != errcode.InternalError {
+		t.Fatalf("code=%d want=%d", body.Code, errcode.InternalError)
+	}
+
+	var usersCount int
+	if err := db.QueryRow(context.Background(), `select count(1) from users where email=$1`, "queue-down@example.com").Scan(&usersCount); err != nil {
+		t.Fatalf("query users: %v", err)
+	}
+	if usersCount != 0 {
+		t.Fatalf("users count=%d want=0", usersCount)
+	}
+
+	var verificationsCount int
+	if err := db.QueryRow(context.Background(), `
+select count(1)
+from email_verifications ev
+join users u on u.id=ev.user_id
+where u.email=$1`, "queue-down@example.com").Scan(&verificationsCount); err != nil {
+		t.Fatalf("query email_verifications: %v", err)
+	}
+	if verificationsCount != 0 {
+		t.Fatalf("email_verifications count=%d want=0", verificationsCount)
+	}
+
+	var recordsCount int
+	if err := db.QueryRow(context.Background(), `select count(1) from email_records where to_email=$1`, "queue-down@example.com").Scan(&recordsCount); err != nil {
+		t.Fatalf("query email_records: %v", err)
+	}
+	if recordsCount != 0 {
+		t.Fatalf("email_records count=%d want=0", recordsCount)
+	}
+}
+
 func popQueuedJob(t *testing.T, rdb *goredis.Client) (queuedEmailJob, error) {
 	t.Helper()
 	raw, err := rdb.LPop(context.Background(), emailQueueName).Result()
