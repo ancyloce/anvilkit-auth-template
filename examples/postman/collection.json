@@ -108,6 +108,37 @@
       ]
     },
     {
+      "name": "resend-verification",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url_auth}}/api/v1/auth/resend-verification",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{register_email}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('status accepted', ()=> pm.expect(pm.response.code).to.eql(202));",
+              "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
+              "pm.test('resend message', ()=> pm.expect(b.data.message).to.eql('Verification email sent'));",
+              "pm.test('retry_after 90', ()=> pm.expect(b.data.retry_after).to.eql(90));"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "verify-email (otp)",
       "request": {
         "method": "POST",

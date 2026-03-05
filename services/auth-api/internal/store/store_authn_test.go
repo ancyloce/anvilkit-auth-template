@@ -141,6 +141,96 @@ where token_type='otp' and token_hash=$1`, otpHash).Scan(&otpCount); err != nil 
 	}
 }
 
+func TestStoreRollbackResendVerificationRestoresPreviousVerificationRows(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-resend-rollback-user"
+	emailAddr := "store-resend-rollback@example.com"
+	seedStoreUser(t, db, userID, emailAddr)
+
+	oldExpiresAt := time.Now().Add(10 * time.Minute).Round(time.Second)
+	oldOTPID := "store-resend-old-otp"
+	oldMagicID := "store-resend-old-magic"
+	if _, err := db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at)
+values($1,$2,$3,'otp',$4,now()-interval '3 minutes')`,
+		oldOTPID,
+		userID,
+		commonemail.HashToken("111111"),
+		oldExpiresAt,
+	); err != nil {
+		t.Fatalf("insert old otp verification: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at)
+values($1,$2,$3,'magic_link',$4,now()-interval '3 minutes')`,
+		oldMagicID,
+		userID,
+		commonemail.HashToken("old-magic-token"),
+		oldExpiresAt,
+	); err != nil {
+		t.Fatalf("insert old magic verification: %v", err)
+	}
+
+	now := time.Now().Round(time.Second)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	resend, err := s.ResendVerification(ctx, emailAddr, "222222", "new-magic-token", now.Add(15*time.Minute), now)
+	if err != nil {
+		t.Fatalf("ResendVerification: %v", err)
+	}
+	if resend == nil || resend.EmailRecordID == "" || resend.OTPVerificationID == "" || resend.MagicVerificationID == "" {
+		t.Fatalf("unexpected resend result: %+v", resend)
+	}
+	if len(resend.RevokedVerifications) != 2 {
+		t.Fatalf("revoked verification count=%d want=2", len(resend.RevokedVerifications))
+	}
+
+	ctxRollback, cancelRollback := testCtx(t)
+	defer cancelRollback()
+	if err := s.RollbackResendVerification(ctxRollback, resend); err != nil {
+		t.Fatalf("RollbackResendVerification: %v", err)
+	}
+
+	var deletedCount int
+	if err := db.QueryRow(context.Background(), `
+select count(1)
+from email_verifications
+where user_id=$1 and id = any($2)`,
+		userID,
+		[]string{resend.OTPVerificationID, resend.MagicVerificationID},
+	).Scan(&deletedCount); err != nil {
+		t.Fatalf("query new verification rows: %v", err)
+	}
+	if deletedCount != 0 {
+		t.Fatalf("new verification rows remaining=%d want=0", deletedCount)
+	}
+
+	var restoredOTPExpiry, restoredMagicExpiry time.Time
+	if err := db.QueryRow(context.Background(), `select expires_at from email_verifications where id=$1`, oldOTPID).Scan(&restoredOTPExpiry); err != nil {
+		t.Fatalf("query restored old otp expiry: %v", err)
+	}
+	if err := db.QueryRow(context.Background(), `select expires_at from email_verifications where id=$1`, oldMagicID).Scan(&restoredMagicExpiry); err != nil {
+		t.Fatalf("query restored old magic expiry: %v", err)
+	}
+	if !restoredOTPExpiry.Round(time.Second).Equal(oldExpiresAt) {
+		t.Fatalf("old otp expires_at=%s want=%s", restoredOTPExpiry, oldExpiresAt)
+	}
+	if !restoredMagicExpiry.Round(time.Second).Equal(oldExpiresAt) {
+		t.Fatalf("old magic expires_at=%s want=%s", restoredMagicExpiry, oldExpiresAt)
+	}
+
+	var emailRecordCount int
+	if err := db.QueryRow(context.Background(), `select count(1) from email_records where id=$1`, resend.EmailRecordID).Scan(&emailRecordCount); err != nil {
+		t.Fatalf("query resend email record: %v", err)
+	}
+	if emailRecordCount != 0 {
+		t.Fatalf("resend email record count=%d want=0", emailRecordCount)
+	}
+}
+
 func TestStoreVerifyEmailOTPPromotesPendingUser(t *testing.T) {
 	db := testutil.MustTestDB(t)
 	testutil.TruncateAuthTables(t, db)

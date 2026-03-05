@@ -9,6 +9,7 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,9 @@ const (
 	verificationTTL                   = 15 * time.Minute
 	verificationEmailSubject          = "Verify your email"
 	verificationAcceptedMessage       = "registration accepted, please check your email for verification"
+	resendVerificationWindow          = 90 * time.Second
+	resendVerificationLimit           = 6
+	resendVerificationMessage         = "Verification email sent"
 	magicLinkStateCookieName          = "ak_magic_link_state"
 	magicLinkSuccessPath              = "/verify-email/success"
 	magicLinkStateByteLen             = 24
@@ -42,6 +46,18 @@ const (
 
 var otpCodePattern = regexp.MustCompile(`^\d{6}$`)
 var magicLinkStatePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32}$`)
+var resendRateLimitScript = goredis.NewScript(`
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+if ttl <= 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+  ttl = redis.call('TTL', KEYS[1])
+end
+return {current, ttl}
+`)
 
 type emailSendJob struct {
 	RecordID  string `json:"record_id"`
@@ -183,6 +199,99 @@ func (h *Handler) Register(c *gin.Context) error {
 		Message:   verificationAcceptedMessage,
 		Data: dto.RegisterResponse{
 			User: dto.UserSummary{ID: registered.User.ID, Email: registered.User.Email},
+		},
+	})
+	return nil
+}
+
+func (h *Handler) ResendVerification(c *gin.Context) error {
+	var req dto.ResendVerificationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		return apperr.BadRequest(err)
+	}
+
+	emailAddr := strings.TrimSpace(strings.ToLower(req.Email))
+	if _, err := mail.ParseAddress(emailAddr); err != nil {
+		return apperr.BadRequest(fmt.Errorf("invalid_email"))
+	}
+
+	count, retryAfter, err := h.checkResendRateLimit(c, emailAddr)
+	if err != nil {
+		return err
+	}
+	if count > resendVerificationLimit {
+		return apperr.RateLimited(errors.New("resend_rate_limited")).WithData(map[string]any{
+			"reason":      "too_many_requests",
+			"retry_after": retryAfter,
+		})
+	}
+	if count > 1 {
+		return apperr.RateLimited(errors.New("resend_cooldown_active")).WithData(map[string]any{
+			"reason":      "cooldown_active",
+			"retry_after": retryAfter,
+		})
+	}
+
+	otp, err := commonemail.GenerateOTP()
+	if err != nil {
+		return err
+	}
+	magicToken, err := commonemail.GenerateMagicToken()
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	expiresAt := now.Add(verificationTTL)
+
+	resend, err := h.Store.ResendVerification(c, emailAddr, otp, magicToken, expiresAt, now)
+	if err != nil {
+		if errors.Is(err, store.ErrResendUserNotFound) || errors.Is(err, store.ErrResendAlreadyVerified) {
+			return apperr.BadRequest(errors.New("resend_not_allowed")).WithData(map[string]any{"reason": "resend_not_allowed"})
+		}
+		return err
+	}
+	rollbackResend := func(cause error) error {
+		rollbackErr := h.Store.RollbackResendVerification(c, resend)
+		if rollbackErr == nil {
+			return cause
+		}
+		return fmt.Errorf("%w; rollback resend verification: %v", cause, rollbackErr)
+	}
+
+	magicLinkState, err := getOrCreateMagicLinkState(c)
+	if err != nil {
+		return rollbackResend(err)
+	}
+	magicLink := buildMagicLink(h.PublicBaseURL, magicToken, magicLinkState)
+	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
+
+	if h.Redis == nil {
+		return rollbackResend(errors.New("redis_unavailable"))
+	}
+	q, err := queue.New(h.Redis)
+	if err != nil {
+		return rollbackResend(err)
+	}
+	if err := q.EnqueueContext(c, emailQueueName, emailSendJob{
+		RecordID:  resend.EmailRecordID,
+		To:        resend.UserEmail,
+		Subject:   verificationEmailSubject,
+		HTMLBody:  htmlBody,
+		TextBody:  textBody,
+		OTP:       otp,
+		MagicLink: magicLink,
+	}); err != nil {
+		return rollbackResend(err)
+	}
+
+	setMagicLinkStateCookie(c, magicLinkState, expiresAt)
+	c.JSON(http.StatusAccepted, resp.Envelope{
+		RequestID: c.GetString("request_id"),
+		Code:      0,
+		Message:   "ok",
+		Data: dto.ResendVerificationResponse{
+			Message:    resendVerificationMessage,
+			RetryAfter: int(resendVerificationWindow / time.Second),
 		},
 	})
 	return nil
@@ -574,6 +683,39 @@ func (h *Handler) issueTokens(ctx context.Context, uid, tid, userAgent, ip strin
 	return at, rt, nil
 }
 
+func (h *Handler) checkResendRateLimit(ctx context.Context, emailAddr string) (int64, int, error) {
+	if h.Redis == nil {
+		return 0, 0, errors.New("redis_unavailable")
+	}
+	windowSeconds := int64(resendVerificationWindow / time.Second)
+	if windowSeconds <= 0 {
+		windowSeconds = 90
+	}
+	key := fmt.Sprintf("resend:%s", emailAddr)
+	raw, err := resendRateLimitScript.Run(ctx, h.Redis, []string{key}, windowSeconds).Result()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	values, ok := raw.([]interface{})
+	if !ok || len(values) != 2 {
+		return 0, 0, errors.New("invalid_resend_rate_limit_result")
+	}
+	count, err := parseRedisInteger(values[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	retryAfter, err := parseRedisInteger(values[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	retryAfterSeconds := int(retryAfter)
+	if retryAfterSeconds <= 0 {
+		retryAfterSeconds = int(windowSeconds)
+	}
+	return count, retryAfterSeconds, nil
+}
+
 func (h *Handler) isLoginRateLimited(ctx context.Context, key string) (bool, error) {
 	if h.Redis == nil {
 		return false, nil
@@ -600,4 +742,29 @@ func (h *Handler) increaseLoginFailCount(ctx context.Context, key string) {
 
 func NotFound(c *gin.Context) {
 	resp.Fail(c, http.StatusNotFound, 1004, "not_found", map[string]any{"reason": "route_not_found"})
+}
+
+func getOrCreateMagicLinkState(c *gin.Context) (string, error) {
+	if cookieState, err := c.Cookie(magicLinkStateCookieName); err == nil {
+		cookieState = strings.TrimSpace(cookieState)
+		if isValidMagicLinkState(cookieState) {
+			return cookieState, nil
+		}
+	}
+	return util.RandomToken(magicLinkStateByteLen)
+}
+
+func parseRedisInteger(v any) (int64, error) {
+	switch n := v.(type) {
+	case int64:
+		return n, nil
+	case int:
+		return int64(n), nil
+	case string:
+		return strconv.ParseInt(n, 10, 64)
+	case []byte:
+		return strconv.ParseInt(string(n), 10, 64)
+	default:
+		return 0, fmt.Errorf("unexpected redis integer type: %T", v)
+	}
 }
