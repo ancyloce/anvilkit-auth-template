@@ -9,6 +9,7 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,18 @@ const (
 
 var otpCodePattern = regexp.MustCompile(`^\d{6}$`)
 var magicLinkStatePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32}$`)
+var resendRateLimitScript = goredis.NewScript(`
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+if ttl <= 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+  ttl = redis.call('TTL', KEYS[1])
+end
+return {current, ttl}
+`)
 
 type emailSendJob struct {
 	RecordID  string `json:"record_id"`
@@ -670,23 +683,31 @@ func (h *Handler) checkResendRateLimit(ctx context.Context, emailAddr string) (i
 	if h.Redis == nil {
 		return 0, 0, errors.New("redis_unavailable")
 	}
+	windowSeconds := int64(resendVerificationWindow / time.Second)
+	if windowSeconds <= 0 {
+		windowSeconds = 90
+	}
 	key := fmt.Sprintf("resend:%s", emailAddr)
-	count, err := h.Redis.Incr(ctx, key).Result()
+	raw, err := resendRateLimitScript.Run(ctx, h.Redis, []string{key}, windowSeconds).Result()
 	if err != nil {
 		return 0, 0, err
 	}
-	if count == 1 {
-		if err := h.Redis.Expire(ctx, key, resendVerificationWindow).Err(); err != nil {
-			return 0, 0, err
-		}
+
+	values, ok := raw.([]interface{})
+	if !ok || len(values) != 2 {
+		return 0, 0, errors.New("invalid_resend_rate_limit_result")
 	}
-	retryAfter, err := h.Redis.TTL(ctx, key).Result()
+	count, err := parseRedisInteger(values[0])
 	if err != nil {
 		return 0, 0, err
 	}
-	retryAfterSeconds := int(retryAfter / time.Second)
+	retryAfter, err := parseRedisInteger(values[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	retryAfterSeconds := int(retryAfter)
 	if retryAfterSeconds <= 0 {
-		retryAfterSeconds = int(resendVerificationWindow / time.Second)
+		retryAfterSeconds = int(windowSeconds)
 	}
 	return count, retryAfterSeconds, nil
 }
@@ -727,4 +748,19 @@ func getOrCreateMagicLinkState(c *gin.Context) (string, error) {
 		}
 	}
 	return util.RandomToken(magicLinkStateByteLen)
+}
+
+func parseRedisInteger(v any) (int64, error) {
+	switch n := v.(type) {
+	case int64:
+		return n, nil
+	case int:
+		return int64(n), nil
+	case string:
+		return strconv.ParseInt(n, 10, 64)
+	case []byte:
+		return strconv.ParseInt(string(n), 10, 64)
+	default:
+		return 0, fmt.Errorf("unexpected redis integer type: %T", v)
+	}
 }
