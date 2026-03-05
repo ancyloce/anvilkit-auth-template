@@ -74,6 +74,7 @@ type ResendVerificationResult struct {
 	EmailRecordID        string
 	OTPVerificationID    string
 	MagicVerificationID  string
+	RevokedAt            time.Time
 	RevokedVerifications []RevokedVerificationSnapshot
 }
 
@@ -262,6 +263,7 @@ where user_id = $1
 		EmailRecordID:        created.EmailRecordID,
 		OTPVerificationID:    created.OTPVerificationID,
 		MagicVerificationID:  created.MagicVerificationID,
+		RevokedAt:            now,
 		RevokedVerifications: revoked,
 	}, nil
 }
@@ -302,7 +304,10 @@ where id = $1
 		return err
 	}
 
-	rollbackAt := time.Now()
+	rollbackAt := resend.RevokedAt
+	if rollbackAt.IsZero() {
+		rollbackAt = time.Now()
+	}
 	for _, snap := range resend.RevokedVerifications {
 		if _, err = tx.Exec(ctx, `
 update email_verifications
