@@ -306,8 +306,8 @@ values($1,$2,1,now(),now(),now())`,
 	if body.Code != errcode.BadRequest {
 		t.Fatalf("code=%d want=%d", body.Code, errcode.BadRequest)
 	}
-	if body.Data.Reason != "already_verified" {
-		t.Fatalf("reason=%q want=%q", body.Data.Reason, "already_verified")
+	if body.Data.Reason != "resend_not_allowed" {
+		t.Fatalf("reason=%q want=%q", body.Data.Reason, "resend_not_allowed")
 	}
 
 	q, err := queue.New(rdb)
@@ -320,6 +320,36 @@ values($1,$2,1,now(),now(),now())`,
 	}
 	if n != 0 {
 		t.Fatalf("queue length=%d want=0", n)
+	}
+}
+
+func TestResendVerificationUserNotFoundReturnsGenericBadRequest(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+	testutil.FlushRedisKeys(t, rdb, "resend:*")
+
+	r := newResendVerificationRouter(t, db, rdb)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/resend-verification", map[string]string{
+		"email": "missing-resend-user@example.com",
+	})
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want=%d body=%s", res.Code, http.StatusBadRequest, res.Body.String())
+	}
+
+	var body struct {
+		Code int `json:"code"`
+		Data struct {
+			Reason string `json:"reason"`
+		} `json:"data"`
+	}
+	decodeResponse(t, res, &body)
+	if body.Code != errcode.BadRequest {
+		t.Fatalf("code=%d want=%d", body.Code, errcode.BadRequest)
+	}
+	if body.Data.Reason != "resend_not_allowed" {
+		t.Fatalf("reason=%q want=%q", body.Data.Reason, "resend_not_allowed")
 	}
 }
 

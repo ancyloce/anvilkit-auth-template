@@ -245,11 +245,8 @@ func (h *Handler) ResendVerification(c *gin.Context) error {
 
 	resend, err := h.Store.ResendVerification(c, emailAddr, otp, magicToken, expiresAt, now)
 	if err != nil {
-		if errors.Is(err, store.ErrResendUserNotFound) {
-			return apperr.BadRequest(err).WithData(map[string]any{"reason": "user_not_found"})
-		}
-		if errors.Is(err, store.ErrResendAlreadyVerified) {
-			return apperr.BadRequest(err).WithData(map[string]any{"reason": "already_verified"})
+		if errors.Is(err, store.ErrResendUserNotFound) || errors.Is(err, store.ErrResendAlreadyVerified) {
+			return apperr.BadRequest(errors.New("resend_not_allowed")).WithData(map[string]any{"reason": "resend_not_allowed"})
 		}
 		return err
 	}
