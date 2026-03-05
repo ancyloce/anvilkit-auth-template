@@ -250,20 +250,27 @@ func (h *Handler) ResendVerification(c *gin.Context) error {
 		}
 		return err
 	}
+	rollbackResend := func(cause error) error {
+		rollbackErr := h.Store.RollbackResendVerification(c, resend)
+		if rollbackErr == nil {
+			return cause
+		}
+		return fmt.Errorf("%w; rollback resend verification: %v", cause, rollbackErr)
+	}
 
 	magicLinkState, err := getOrCreateMagicLinkState(c)
 	if err != nil {
-		return err
+		return rollbackResend(err)
 	}
 	magicLink := buildMagicLink(h.PublicBaseURL, magicToken, magicLinkState)
 	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
 
 	if h.Redis == nil {
-		return errors.New("redis_unavailable")
+		return rollbackResend(errors.New("redis_unavailable"))
 	}
 	q, err := queue.New(h.Redis)
 	if err != nil {
-		return err
+		return rollbackResend(err)
 	}
 	if err := q.EnqueueContext(c, emailQueueName, emailSendJob{
 		RecordID:  resend.EmailRecordID,
@@ -274,7 +281,7 @@ func (h *Handler) ResendVerification(c *gin.Context) error {
 		OTP:       otp,
 		MagicLink: magicLink,
 	}); err != nil {
-		return err
+		return rollbackResend(err)
 	}
 
 	setMagicLinkStateCookie(c, magicLinkState, expiresAt)

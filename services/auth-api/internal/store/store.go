@@ -63,10 +63,18 @@ type RegisterWithVerificationResult struct {
 	EmailRecordID string
 }
 
+type RevokedVerificationSnapshot struct {
+	ID        string
+	ExpiresAt time.Time
+}
+
 type ResendVerificationResult struct {
-	UserID        string
-	UserEmail     string
-	EmailRecordID string
+	UserID               string
+	UserEmail            string
+	EmailRecordID        string
+	OTPVerificationID    string
+	MagicVerificationID  string
+	RevokedVerifications []RevokedVerificationSnapshot
 }
 
 type LoginUser struct {
@@ -196,6 +204,33 @@ for update`,
 		return nil, ErrResendAlreadyVerified
 	}
 
+	rows, err := tx.Query(ctx, `
+select id, expires_at
+from email_verifications
+where user_id = $1
+  and verified_at is null
+  and expires_at > $2
+for update`,
+		userID,
+		now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	revoked := make([]RevokedVerificationSnapshot, 0, 4)
+	for rows.Next() {
+		var snap RevokedVerificationSnapshot
+		if err = rows.Scan(&snap.ID, &snap.ExpiresAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		revoked = append(revoked, snap)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
 	if _, err = tx.Exec(ctx, `
 update email_verifications
 set expires_at = $2
@@ -208,7 +243,7 @@ where user_id = $1
 		return nil, err
 	}
 
-	emailRecordID, err := createVerificationTx(ctx, tx, CreateVerificationParams{
+	created, err := createVerificationWithIDsTx(ctx, tx, CreateVerificationParams{
 		UserID:     userID,
 		OTP:        otp,
 		MagicToken: magicToken,
@@ -222,10 +257,70 @@ where user_id = $1
 		return nil, err
 	}
 	return &ResendVerificationResult{
-		UserID:        userID,
-		UserEmail:     userEmail,
-		EmailRecordID: emailRecordID,
+		UserID:               userID,
+		UserEmail:            userEmail,
+		EmailRecordID:        created.EmailRecordID,
+		OTPVerificationID:    created.OTPVerificationID,
+		MagicVerificationID:  created.MagicVerificationID,
+		RevokedVerifications: revoked,
 	}, nil
+}
+
+func (s *Store) RollbackResendVerification(ctx context.Context, resend *ResendVerificationResult) error {
+	if resend == nil {
+		return nil
+	}
+	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+
+	verificationIDs := []string{resend.OTPVerificationID, resend.MagicVerificationID}
+	if _, err = tx.Exec(ctx, `
+delete from email_verifications
+where user_id = $1
+  and verified_at is null
+  and id = any($2)`,
+		resend.UserID,
+		verificationIDs,
+	); err != nil {
+		return err
+	}
+
+	if _, err = tx.Exec(ctx, `
+delete from email_records
+where id = $1
+  and user_id = $2`,
+		resend.EmailRecordID,
+		resend.UserID,
+	); err != nil {
+		return err
+	}
+
+	rollbackAt := time.Now()
+	for _, snap := range resend.RevokedVerifications {
+		if _, err = tx.Exec(ctx, `
+update email_verifications
+set expires_at = $2
+where id = $1
+  and user_id = $3
+  and verified_at is null
+  and expires_at <= $4`,
+			snap.ID,
+			snap.ExpiresAt,
+			resend.UserID,
+			rollbackAt,
+		); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *Store) VerifyEmailOTP(ctx context.Context, emailAddr, otp string, now time.Time) error {
@@ -577,33 +672,49 @@ func insertRegisteredUserWithPassword(ctx context.Context, tx pgx.Tx, userID, em
 	return nil
 }
 
+type createVerificationTxResult struct {
+	EmailRecordID       string
+	OTPVerificationID   string
+	MagicVerificationID string
+}
+
 func createVerificationTx(ctx context.Context, tx pgx.Tx, params CreateVerificationParams) (string, error) {
+	res, err := createVerificationWithIDsTx(ctx, tx, params)
+	if err != nil {
+		return "", err
+	}
+	return res.EmailRecordID, nil
+}
+
+func createVerificationWithIDsTx(ctx context.Context, tx pgx.Tx, params CreateVerificationParams) (*createVerificationTxResult, error) {
 	var recipientEmail string
 	if err := tx.QueryRow(ctx, `select email from users where id=$1`, params.UserID).Scan(&recipientEmail); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	otpHash := email.HashToken(params.OTP)
 	magicLinkHash := email.HashToken(params.MagicToken)
+	otpVerificationID := uuid.NewString()
 	if _, err := tx.Exec(
 		ctx,
 		`insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at) values($1,$2,$3,'otp',$4,now())`,
-		uuid.NewString(),
+		otpVerificationID,
 		params.UserID,
 		otpHash,
 		params.ExpiresAt,
 	); err != nil {
-		return "", err
+		return nil, err
 	}
+	magicVerificationID := uuid.NewString()
 	if _, err := tx.Exec(
 		ctx,
 		`insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at) values($1,$2,$3,'magic_link',$4,now())`,
-		uuid.NewString(),
+		magicVerificationID,
 		params.UserID,
 		magicLinkHash,
 		params.ExpiresAt,
 	); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	emailRecordID := uuid.NewString()
@@ -614,7 +725,11 @@ func createVerificationTx(ctx context.Context, tx pgx.Tx, params CreateVerificat
 		params.UserID,
 		recipientEmail,
 	); err != nil {
-		return "", err
+		return nil, err
 	}
-	return emailRecordID, nil
+	return &createVerificationTxResult{
+		EmailRecordID:       emailRecordID,
+		OTPVerificationID:   otpVerificationID,
+		MagicVerificationID: magicVerificationID,
+	}, nil
 }
