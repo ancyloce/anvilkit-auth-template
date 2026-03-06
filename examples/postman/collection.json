@@ -70,6 +70,7 @@
               "const b = pm.response.json();",
               "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
               "pm.test('tenant id exists', ()=> pm.expect(b.data.tenant.id).to.be.a('string').and.not.empty);",
+              "pm.test('bootstrap requires email verification message', ()=> pm.expect(b.message).to.eql('bootstrap completed; owner must verify email before login'));",
               "pm.collectionVariables.set('tenant_id', b.data.tenant.id);"
             ]
           }

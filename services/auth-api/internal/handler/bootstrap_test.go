@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,8 @@ func TestBootstrapSuccessAndLogin(t *testing.T) {
 	db := newTestDB(t)
 	rdb := newTestRedis(t)
 	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
 
 	r := newBootstrapRouter(t, db, rdb)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/bootstrap", map[string]string{
@@ -31,8 +34,9 @@ func TestBootstrapSuccessAndLogin(t *testing.T) {
 	}
 
 	var body struct {
-		Code int `json:"code"`
-		Data struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
 			Tenant struct {
 				ID   string `json:"id"`
 				Name string `json:"name"`
@@ -46,6 +50,9 @@ func TestBootstrapSuccessAndLogin(t *testing.T) {
 	decodeResponse(t, res, &body)
 	if body.Code != 0 {
 		t.Fatalf("unexpected envelope code: %d", body.Code)
+	}
+	if body.Message != bootstrapVerificationMessage {
+		t.Fatalf("message=%q want=%q", body.Message, bootstrapVerificationMessage)
 	}
 	if body.Data.Tenant.ID == "" || body.Data.OwnerUser.ID == "" {
 		t.Fatalf("tenant/user id should not be empty: %+v", body.Data)
@@ -70,7 +77,34 @@ func TestBootstrapSuccessAndLogin(t *testing.T) {
 		t.Fatalf("tenant_users(owner) count=%d, want 1", relCount)
 	}
 
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	if job.To != "owner@example.com" {
+		t.Fatalf("verification email recipient=%q want owner@example.com", job.To)
+	}
+	if !strings.Contains(job.TextBody, job.OTP) || !strings.Contains(job.TextBody, job.MagicLink) {
+		t.Fatalf("verification email body missing OTP/magic_link: %q", job.TextBody)
+	}
+
 	loginRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
+		"email":    "owner@example.com",
+		"password": "Passw0rd!",
+	})
+	if loginRes.Code != http.StatusForbidden {
+		t.Fatalf("login status = %d, want %d; body = %s", loginRes.Code, http.StatusForbidden, loginRes.Body.String())
+	}
+
+	verifyRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "owner@example.com",
+		"otp":   job.OTP,
+	})
+	if verifyRes.Code != http.StatusOK {
+		t.Fatalf("verify-email status = %d, want %d; body = %s", verifyRes.Code, http.StatusOK, verifyRes.Body.String())
+	}
+
+	loginRes = performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
 		"email":    "owner@example.com",
 		"password": "Passw0rd!",
 	})
@@ -190,6 +224,7 @@ func newBootstrapRouter(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client) *gi
 	r.Use(ginmid.RequestID(), ginmid.ErrorHandler())
 	h := newTestAuthHandler(t, db, rdb)
 	r.POST("/v1/bootstrap", ginmid.Wrap(h.Bootstrap))
+	r.POST("/v1/auth/verify-email", ginmid.Wrap(h.VerifyEmail))
 	r.POST("/v1/auth/login", func(c *gin.Context) { c.Request.RemoteAddr = "192.0.2.1:12345"; ginmid.Wrap(h.Login)(c) })
 	return r
 }
