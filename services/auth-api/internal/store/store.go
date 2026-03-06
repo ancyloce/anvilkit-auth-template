@@ -22,6 +22,7 @@ var (
 	ErrRefreshExpired            = errors.New("refresh_expired")
 	ErrRefreshSessionRevoked     = errors.New("session_revoked")
 	ErrBootstrapPasswordMismatch = errors.New("bootstrap_password_mismatch")
+	ErrBootstrapEmailUnverified  = errors.New("bootstrap_email_not_verified")
 	ErrTenantNameConflict        = errors.New("tenant_name_conflict")
 	ErrNotInTenant               = errors.New("not_in_tenant")
 	ErrInvalidVerificationOTP    = errors.New("invalid_verification_otp")
@@ -506,12 +507,15 @@ func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName strin
 	}()
 
 	uid := ""
-	var pwdHash *string
+	var (
+		pwdHash         *string
+		emailVerifiedAt *time.Time
+	)
 	err = tx.QueryRow(ctx, `
-select u.id, upc.password_hash
+select u.id, upc.password_hash, u.email_verified_at
 from users u
 left join user_password_credentials upc on upc.user_id = u.id
-where u.email=$1`, email).Scan(&uid, &pwdHash)
+where u.email=$1`, email).Scan(&uid, &pwdHash, &emailVerifiedAt)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
@@ -531,7 +535,10 @@ where u.email=$1`, email).Scan(&uid, &pwdHash)
 		if pwdHash == nil || crypto.VerifyPassword(*pwdHash, password) != nil {
 			return nil, ErrBootstrapPasswordMismatch
 		}
-		if _, err = tx.Exec(ctx, `update users set status=1,email_verified_at=coalesce(email_verified_at,now()),updated_at=now() where id=$1`, uid); err != nil {
+		if emailVerifiedAt == nil {
+			return nil, ErrBootstrapEmailUnverified
+		}
+		if _, err = tx.Exec(ctx, `update users set status=1,updated_at=now() where id=$1`, uid); err != nil {
 			return nil, err
 		}
 	}

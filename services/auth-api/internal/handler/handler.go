@@ -115,6 +115,12 @@ func (h *Handler) Bootstrap(c *gin.Context) error {
 		if errors.Is(err, store.ErrBootstrapPasswordMismatch) {
 			return apperr.Unauthorized(err).WithData(map[string]any{"reason": "owner_password_mismatch"})
 		}
+		if errors.Is(err, store.ErrBootstrapEmailUnverified) {
+			return apperr.Forbidden(err).WithData(map[string]any{
+				"reason":  "email_not_verified",
+				"message": "Please verify your email before bootstrapping a tenant.",
+			})
+		}
 		if errors.Is(err, store.ErrTenantNameConflict) {
 			return apperr.Conflict(err).WithData(map[string]any{"reason": "tenant_name_conflict"})
 		}
