@@ -216,7 +216,7 @@
       ]
     },
     {
-      "name": "login",
+      "name": "login (unverified user blocked)",
       "request": {
         "method": "POST",
         "header": [
@@ -237,6 +237,38 @@
           "script": {
             "exec": [
               "const b = pm.response.json();",
+              "pm.test('status forbidden', ()=> pm.expect(pm.response.code).to.eql(403));",
+              "pm.test('forbidden code', ()=> pm.expect(b.code).to.eql(1003));",
+              "pm.test('reason email_not_verified', ()=> pm.expect(b.data.reason).to.eql('email_not_verified'));",
+              "pm.test('message asks verification', ()=> pm.expect(b.data.message).to.eql('Please verify your email before logging in.'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "login (verified user)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url_auth}}/v1/auth/login",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{register_email}}\",\n  \"password\": \"Passw0rd!\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const b = pm.response.json();",
+              "pm.test('status ok', ()=> pm.expect(pm.response.code).to.eql(200));",
               "pm.test('envelope code=0', ()=> pm.expect(b.code).to.eql(0));",
               "pm.test('has access token', ()=> pm.expect(b.data.access_token).to.be.a('string'));",
               "pm.test('has refresh token', ()=> pm.expect(b.data.refresh_token).to.be.a('string'));",
