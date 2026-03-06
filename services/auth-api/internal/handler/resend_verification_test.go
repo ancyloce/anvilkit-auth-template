@@ -105,6 +105,12 @@ where u.email = $1
 	if token == "" || state == "" {
 		t.Fatalf("job magic_link=%q missing token/state", job.MagicLink)
 	}
+	if job.ExpiresIn != "15 minutes" {
+		t.Fatalf("job expires_in=%q want=%q", job.ExpiresIn, "15 minutes")
+	}
+	if job.TextBody != "" || job.HTMLBody != "" {
+		t.Fatalf("expected queue payload bodies to be empty for worker-side template rendering: text=%q html=%q", job.TextBody, job.HTMLBody)
+	}
 
 	stateCookie := findCookieByName(res, magicLinkStateCookieName)
 	if stateCookie == nil {

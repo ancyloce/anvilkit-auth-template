@@ -84,8 +84,11 @@ func TestBootstrapSuccessAndLogin(t *testing.T) {
 	if job.To != "owner@example.com" {
 		t.Fatalf("verification email recipient=%q want owner@example.com", job.To)
 	}
-	if !strings.Contains(job.TextBody, job.OTP) || !strings.Contains(job.TextBody, job.MagicLink) {
-		t.Fatalf("verification email body missing OTP/magic_link: %q", job.TextBody)
+	if job.ExpiresIn != "15 minutes" {
+		t.Fatalf("job expires_in=%q want=%q", job.ExpiresIn, "15 minutes")
+	}
+	if strings.TrimSpace(job.TextBody) != "" || strings.TrimSpace(job.HTMLBody) != "" {
+		t.Fatalf("expected queue payload bodies to be empty for worker-side template rendering: text=%q html=%q", job.TextBody, job.HTMLBody)
 	}
 
 	loginRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{

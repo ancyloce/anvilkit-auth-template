@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Verify your email</title>
+    <style>
+      :root { color-scheme: light; }
+      body { margin: 0; padding: 0; background: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #111827; }
+      .wrapper { width: 100%; padding: 24px 12px; box-sizing: border-box; }
+      .card { max-width: 560px; margin: 0 auto; background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; }
+      .content { padding: 28px 24px; }
+      h1 { margin: 0 0 12px; font-size: 22px; line-height: 1.3; }
+      p { margin: 0 0 16px; color: #374151; font-size: 15px; line-height: 1.6; }
+      .otp { margin: 16px 0 22px; text-align: center; }
+      .otp-code { display: inline-block; letter-spacing: 0.28em; font-weight: 700; font-size: 30px; color: #111827; padding: 12px 18px; border-radius: 10px; background: #f9fafb; border: 1px solid #e5e7eb; }
+      .button { display: inline-block; background: #2563eb; color: #fff !important; text-decoration: none; border-radius: 10px; padding: 12px 18px; font-size: 15px; font-weight: 600; }
+      .link-box { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: #f9fafb; border: 1px solid #e5e7eb; word-break: break-all; font-size: 13px; line-height: 1.5; }
+      .muted { color: #6b7280; font-size: 13px; }
+      .divider { border: 0; border-top: 1px solid #e5e7eb; margin: 24px 0; }
+      @media (max-width: 480px) {
+        .wrapper { padding: 12px 8px; }
+        .content { padding: 22px 16px; }
+        .otp-code { font-size: 26px; letter-spacing: 0.2em; width: 100%; box-sizing: border-box; }
+        .button { width: 100%; text-align: center; box-sizing: border-box; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrapper"><div class="card"><div class="content">
+      <h1>Verify your email address</h1>
+      <p>Use one of the options below to finish verification. Both options expire in <strong>{{.ExpiresIn}}</strong>.</p>
+      <p><strong>Option 1: Enter this OTP code</strong></p>
+      <div class="otp"><span class="otp-code">{{.OTP}}</span></div>
+      <hr class="divider">
+      <p><strong>Option 2: Open this Magic Link</strong></p>
+      <p><a class="button" href="{{.MagicLink}}">Verify with Magic Link</a></p>
+      <p class="link-box"><a href="{{.MagicLink}}">{{.MagicLink}}</a></p>
+      <p class="muted">If you did not request this email, you can safely ignore it.</p>
+    </div></div></div>
+  </body>
+</html>

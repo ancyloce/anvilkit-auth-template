@@ -1,15 +1,19 @@
 package consumer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	htmltemplate "html/template"
 	"log"
 	"strings"
+	texttemplate "text/template"
 	"time"
 
 	"anvilkit-auth-template/services/email-worker/internal/sender"
+	emailtemplates "anvilkit-auth-template/services/email-worker/templates"
 )
 
 var (
@@ -20,6 +24,14 @@ var (
 	ErrInvalidJob   = errors.New("invalid_email_job")
 	ErrEmptyRecord  = errors.New("empty_record_id")
 	ErrEmptyToEmail = errors.New("empty_to_email")
+	ErrEmptyOTP     = errors.New("empty_otp")
+	ErrEmptyMagic   = errors.New("empty_magic_link")
+	ErrEmptyExpiry  = errors.New("empty_expires_in")
+)
+
+var (
+	verificationHTMLTemplate = htmltemplate.Must(htmltemplate.ParseFS(emailtemplates.FS, "verification_email.html.tmpl"))
+	verificationTextTemplate = texttemplate.Must(texttemplate.ParseFS(emailtemplates.FS, "verification_email.txt.tmpl"))
 )
 
 type Queue interface {
@@ -36,11 +48,14 @@ type Store interface {
 }
 
 type EmailJob struct {
-	RecordID string `json:"record_id"`
-	To       string `json:"to"`
-	Subject  string `json:"subject"`
-	HTMLBody string `json:"html_body"`
-	TextBody string `json:"text_body"`
+	RecordID  string `json:"record_id"`
+	To        string `json:"to"`
+	Subject   string `json:"subject"`
+	HTMLBody  string `json:"html_body"`
+	TextBody  string `json:"text_body"`
+	OTP       string `json:"otp"`
+	MagicLink string `json:"magic_link"`
+	ExpiresIn string `json:"expires_in"`
 }
 
 type Consumer struct {
@@ -107,11 +122,26 @@ func (c *Consumer) handleJob(ctx context.Context, job EmailJob) error {
 		return errors.New(reason)
 	}
 
+	htmlBody := job.HTMLBody
+	textBody := job.TextBody
+	if strings.TrimSpace(htmlBody) == "" && strings.TrimSpace(textBody) == "" {
+		renderedHTML, renderedText, err := renderVerificationEmailBody(job)
+		if err != nil {
+			reason := fmt.Sprintf("%v: %v", ErrInvalidJob, err)
+			if markErr := c.Store.MarkFailed(ctx, job.RecordID, reason); markErr != nil {
+				return fmt.Errorf("%s; mark failed: %v", reason, markErr)
+			}
+			return errors.New(reason)
+		}
+		htmlBody = renderedHTML
+		textBody = renderedText
+	}
+
 	externalID, err := c.Sender.Send(ctx, sender.Request{
 		To:       job.To,
 		Subject:  job.Subject,
-		HTMLBody: job.HTMLBody,
-		TextBody: job.TextBody,
+		HTMLBody: htmlBody,
+		TextBody: textBody,
 	})
 	if err != nil {
 		if markErr := c.Store.MarkFailed(ctx, job.RecordID, err.Error()); markErr != nil {
@@ -125,6 +155,37 @@ func (c *Consumer) handleJob(ctx context.Context, job EmailJob) error {
 	}
 
 	return nil
+}
+
+func renderVerificationEmailBody(job EmailJob) (string, string, error) {
+	if strings.TrimSpace(job.OTP) == "" {
+		return "", "", ErrEmptyOTP
+	}
+	if strings.TrimSpace(job.MagicLink) == "" {
+		return "", "", ErrEmptyMagic
+	}
+	if strings.TrimSpace(job.ExpiresIn) == "" {
+		return "", "", ErrEmptyExpiry
+	}
+	data := struct {
+		OTP       string
+		MagicLink string
+		ExpiresIn string
+	}{
+		OTP:       job.OTP,
+		MagicLink: job.MagicLink,
+		ExpiresIn: job.ExpiresIn,
+	}
+
+	var htmlBody bytes.Buffer
+	if err := verificationHTMLTemplate.Execute(&htmlBody, data); err != nil {
+		return "", "", err
+	}
+	var textBody bytes.Buffer
+	if err := verificationTextTemplate.Execute(&textBody, data); err != nil {
+		return "", "", err
+	}
+	return htmlBody.String(), textBody.String(), nil
 }
 
 func isPayloadDecodeError(err error) bool {

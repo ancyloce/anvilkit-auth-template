@@ -68,6 +68,7 @@ type emailSendJob struct {
 	TextBody  string `json:"text_body"`
 	OTP       string `json:"otp"`
 	MagicLink string `json:"magic_link"`
+	ExpiresIn string `json:"expires_in"`
 }
 
 type Handler struct {
@@ -181,7 +182,6 @@ func (h *Handler) Register(c *gin.Context) error {
 	}
 
 	magicLink := buildMagicLink(h.PublicBaseURL, magicToken, magicLinkState)
-	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
 	if h.Redis == nil {
 		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
 			return fmt.Errorf("redis unavailable; cleanup pending registration: %v", cleanupErr)
@@ -199,10 +199,9 @@ func (h *Handler) Register(c *gin.Context) error {
 		RecordID:  registered.EmailRecordID,
 		To:        registered.User.Email,
 		Subject:   verificationEmailSubject,
-		HTMLBody:  htmlBody,
-		TextBody:  textBody,
 		OTP:       otp,
 		MagicLink: magicLink,
+		ExpiresIn: formatVerificationExpiresIn(verificationTTL),
 	}); err != nil {
 		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
 			return fmt.Errorf("enqueue verification email job: %w; cleanup pending registration: %v", err, cleanupErr)
@@ -281,8 +280,6 @@ func (h *Handler) ResendVerification(c *gin.Context) error {
 		return rollbackResend(err)
 	}
 	magicLink := buildMagicLink(h.PublicBaseURL, magicToken, magicLinkState)
-	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
-
 	if h.Redis == nil {
 		return rollbackResend(errors.New("redis_unavailable"))
 	}
@@ -294,10 +291,9 @@ func (h *Handler) ResendVerification(c *gin.Context) error {
 		RecordID:  resend.EmailRecordID,
 		To:        resend.UserEmail,
 		Subject:   verificationEmailSubject,
-		HTMLBody:  htmlBody,
-		TextBody:  textBody,
 		OTP:       otp,
 		MagicLink: magicLink,
+		ExpiresIn: formatVerificationExpiresIn(verificationTTL),
 	}); err != nil {
 		return rollbackResend(err)
 	}
@@ -533,6 +529,14 @@ func buildVerificationEmailBody(otp, magicLink string) (string, string) {
 	return htmlBody, textBody
 }
 
+func formatVerificationExpiresIn(ttl time.Duration) string {
+	minutes := int(ttl.Round(time.Minute) / time.Minute)
+	if minutes <= 1 {
+		return "1 minute"
+	}
+	return fmt.Sprintf("%d minutes", minutes)
+}
+
 func (h *Handler) enqueueVerificationEmail(c *gin.Context, userID, email string) (string, time.Time, error) {
 	otp, err := commonemail.GenerateOTP()
 	if err != nil {
@@ -564,15 +568,13 @@ func (h *Handler) enqueueVerificationEmail(c *gin.Context, userID, email string)
 		return "", time.Time{}, err
 	}
 	magicLink := buildMagicLink(h.PublicBaseURL, magicToken, magicLinkState)
-	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
 	if err := q.EnqueueContext(c, emailQueueName, emailSendJob{
 		RecordID:  created.EmailRecordID,
 		To:        email,
 		Subject:   verificationEmailSubject,
-		HTMLBody:  htmlBody,
-		TextBody:  textBody,
 		OTP:       otp,
 		MagicLink: magicLink,
+		ExpiresIn: formatVerificationExpiresIn(verificationTTL),
 	}); err != nil {
 		return "", time.Time{}, err
 	}
