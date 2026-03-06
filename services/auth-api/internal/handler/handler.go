@@ -30,18 +30,19 @@ import (
 )
 
 const (
-	userStatusActive            int16 = 1
-	emailQueueName                    = "email:send"
-	verificationTTL                   = 15 * time.Minute
-	verificationEmailSubject          = "Verify your email"
-	verificationAcceptedMessage       = "registration accepted, please check your email for verification"
-	resendVerificationWindow          = 90 * time.Second
-	resendVerificationLimit           = 6
-	resendVerificationMessage         = "Verification email sent"
-	magicLinkStateCookieName          = "ak_magic_link_state"
-	magicLinkSuccessPath              = "/verify-email/success"
-	magicLinkStateByteLen             = 24
-	magicLinkStateTextLen             = 32
+	userStatusActive             int16 = 1
+	emailQueueName                     = "email:send"
+	verificationTTL                    = 15 * time.Minute
+	verificationEmailSubject           = "Verify your email"
+	verificationAcceptedMessage        = "registration accepted, please check your email for verification"
+	bootstrapVerificationMessage       = "bootstrap completed; owner must verify email before login"
+	resendVerificationWindow           = 90 * time.Second
+	resendVerificationLimit            = 6
+	resendVerificationMessage          = "Verification email sent"
+	magicLinkStateCookieName           = "ak_magic_link_state"
+	magicLinkSuccessPath               = "/verify-email/success"
+	magicLinkStateByteLen              = 24
+	magicLinkStateTextLen              = 32
 )
 
 var otpCodePattern = regexp.MustCompile(`^\d{6}$`)
@@ -126,10 +127,21 @@ func (h *Handler) Bootstrap(c *gin.Context) error {
 		}
 		return err
 	}
+	if res.NeedsEmailVerification {
+		magicLinkState, expiresAt, err := h.enqueueVerificationEmail(c, res.UserID, res.UserEmail)
+		if err != nil {
+			return err
+		}
+		setMagicLinkStateCookie(c, magicLinkState, expiresAt)
+	}
+	message := "ok"
+	if res.NeedsEmailVerification {
+		message = bootstrapVerificationMessage
+	}
 	c.JSON(http.StatusCreated, resp.Envelope{
 		RequestID: c.GetString("request_id"),
 		Code:      0,
-		Message:   "ok",
+		Message:   message,
 		Data: dto.BootstrapResponse{
 			Tenant:    dto.TenantSummary{ID: res.TenantID, Name: res.TenantName},
 			OwnerUser: dto.UserSummary{ID: res.UserID, Email: res.UserEmail},
@@ -521,6 +533,52 @@ func buildVerificationEmailBody(otp, magicLink string) (string, string) {
 	return htmlBody, textBody
 }
 
+func (h *Handler) enqueueVerificationEmail(c *gin.Context, userID, email string) (string, time.Time, error) {
+	otp, err := commonemail.GenerateOTP()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	magicToken, err := commonemail.GenerateMagicToken()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	magicLinkState, err := util.RandomToken(magicLinkStateByteLen)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expiresAt := time.Now().Add(verificationTTL)
+	created, err := h.Store.CreateVerification(c, store.CreateVerificationParams{
+		UserID:     userID,
+		OTP:        otp,
+		MagicToken: magicToken,
+		ExpiresAt:  expiresAt,
+	})
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if h.Redis == nil {
+		return "", time.Time{}, errors.New("redis_unavailable")
+	}
+	q, err := queue.New(h.Redis)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	magicLink := buildMagicLink(h.PublicBaseURL, magicToken, magicLinkState)
+	htmlBody, textBody := buildVerificationEmailBody(otp, magicLink)
+	if err := q.EnqueueContext(c, emailQueueName, emailSendJob{
+		RecordID:  created.EmailRecordID,
+		To:        email,
+		Subject:   verificationEmailSubject,
+		HTMLBody:  htmlBody,
+		TextBody:  textBody,
+		OTP:       otp,
+		MagicLink: magicLink,
+	}); err != nil {
+		return "", time.Time{}, err
+	}
+	return magicLinkState, expiresAt, nil
+}
+
 func (h *Handler) Login(c *gin.Context) error {
 	var req dto.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -551,18 +609,18 @@ func (h *Handler) Login(c *gin.Context) error {
 		}
 		return err
 	}
+	if user.EmailVerifiedAt == nil {
+		return apperr.Forbidden(errors.New("email_not_verified")).WithData(map[string]any{
+			"reason":  "email_not_verified",
+			"message": "Please verify your email before logging in.",
+		})
+	}
 	if user.Status != userStatusActive {
 		return apperr.Unauthorized(errors.New("invalid_credentials"))
 	}
 	if crypto.VerifyPassword(user.PasswordHash, req.Password) != nil {
 		h.increaseLoginFailCount(c, key)
 		return apperr.Unauthorized(errors.New("invalid_credentials"))
-	}
-	if user.EmailVerifiedAt == nil {
-		return apperr.Forbidden(errors.New("email_not_verified")).WithData(map[string]any{
-			"reason":  "email_not_verified",
-			"message": "Please verify your email before logging in.",
-		})
 	}
 
 	at, rt, err := h.issueTokens(c, user.ID, "", c.GetHeader("User-Agent"), ip)

@@ -37,10 +37,11 @@ var (
 const maxOTPVerificationAttempts = 5
 
 type BootstrapResult struct {
-	UserID     string
-	UserEmail  string
-	TenantID   string
-	TenantName string
+	UserID                 string
+	UserEmail              string
+	TenantID               string
+	TenantName             string
+	NeedsEmailVerification bool
 }
 
 type RegisteredUser struct {
@@ -525,7 +526,7 @@ where u.email=$1`, email).Scan(&uid, &pwdHash, &emailVerifiedAt)
 		if hErr != nil {
 			return nil, hErr
 		}
-		if _, err = tx.Exec(ctx, `insert into users(id,email,status,email_verified_at,created_at,updated_at) values($1,$2,1,now(),now(),now())`, uid, email); err != nil {
+		if _, err = tx.Exec(ctx, `insert into users(id,email,status,email_verified_at,created_at,updated_at) values($1,$2,0,null,now(),now())`, uid, email); err != nil {
 			return nil, err
 		}
 		if _, err = tx.Exec(ctx, `insert into user_password_credentials(user_id,password_hash,updated_at) values($1,$2,now())`, uid, h); err != nil {
@@ -561,7 +562,7 @@ where u.email=$1`, email).Scan(&uid, &pwdHash, &emailVerifiedAt)
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return &BootstrapResult{UserID: uid, UserEmail: email, TenantID: tid, TenantName: tenantName}, nil
+	return &BootstrapResult{UserID: uid, UserEmail: email, TenantID: tid, TenantName: tenantName, NeedsEmailVerification: emailVerifiedAt == nil}, nil
 }
 
 func (s *Store) GetLoginUserByEmail(ctx context.Context, email string) (*LoginUser, error) {
