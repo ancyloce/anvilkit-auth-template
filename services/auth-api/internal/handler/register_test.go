@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -32,6 +31,7 @@ type queuedEmailJob struct {
 	TextBody  string `json:"text_body"`
 	OTP       string `json:"otp"`
 	MagicLink string `json:"magic_link"`
+	ExpiresIn string `json:"expires_in"`
 }
 
 func TestRegisterSuccess(t *testing.T) {
@@ -158,11 +158,11 @@ where user_id=$1`, userID).Scan(&emailRecordID, &toEmail, &template, &subject, &
 	if parsedMagicLink.Query().Get("token") == "" || parsedMagicLink.Query().Get("state") == "" {
 		t.Fatalf("job magic_link=%q missing token/state", job.MagicLink)
 	}
-	if !containsAll(job.TextBody, job.OTP, job.MagicLink) {
-		t.Fatalf("text_body missing OTP or magic link: %q", job.TextBody)
+	if job.ExpiresIn != "15 minutes" {
+		t.Fatalf("job expires_in=%q want=%q", job.ExpiresIn, "15 minutes")
 	}
-	if !containsAll(html.UnescapeString(job.HTMLBody), job.OTP, job.MagicLink) {
-		t.Fatalf("html_body missing OTP or magic link: %q", job.HTMLBody)
+	if strings.TrimSpace(job.TextBody) != "" || strings.TrimSpace(job.HTMLBody) != "" {
+		t.Fatalf("expected queue payload bodies to be empty for worker-side template rendering: text=%q html=%q", job.TextBody, job.HTMLBody)
 	}
 
 	stateCookie := findCookieByName(res, magicLinkStateCookieName)
@@ -822,16 +822,6 @@ func popQueuedJob(t *testing.T, rdb *goredis.Client) (queuedEmailJob, error) {
 	}
 	return job, nil
 }
-
-func containsAll(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if !strings.Contains(s, sub) {
-			return false
-		}
-	}
-	return true
-}
-
 func findCookieByName(res *httptest.ResponseRecorder, name string) *http.Cookie {
 	for _, c := range res.Result().Cookies() {
 		if c.Name == name {

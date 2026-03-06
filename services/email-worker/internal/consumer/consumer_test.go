@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -173,6 +174,8 @@ func TestRun_SenderFailureMarksFailed(t *testing.T) {
 			job: EmailJob{
 				RecordID: "rec-2",
 				To:       "user@example.com",
+				HTMLBody: "<p>hello</p>",
+				TextBody: "hello",
 			},
 		}},
 	}
@@ -251,6 +254,81 @@ func TestRun_InvalidRecipientMarksFailed(t *testing.T) {
 	}
 }
 
+func TestRun_RendersVerificationTemplatesWhenBodiesMissing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &fakeQueue{
+		resps: []queueResp{{
+			ok: true,
+			job: EmailJob{
+				RecordID:  "rec-render-1",
+				To:        "user@example.com",
+				Subject:   "Verify your email",
+				OTP:       "123456",
+				MagicLink: "https://example.com/verify?token=t&state=s",
+				ExpiresIn: "15 minutes",
+			},
+		}},
+	}
+	s := &fakeSender{resps: []senderResp{{externalID: "esp-render-1"}}}
+	st := &fakeStore{onMarkSent: cancel}
+
+	c := &Consumer{Queue: q, QueueName: "email:send", Timeout: 5 * time.Second, Sender: s, Store: st}
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if len(s.requests) != 1 {
+		t.Fatalf("send requests=%d want=1", len(s.requests))
+	}
+	req := s.requests[0]
+	if req.HTMLBody == "" || req.TextBody == "" {
+		t.Fatalf("expected rendered html/text bodies, got html=%q text=%q", req.HTMLBody, req.TextBody)
+	}
+	if !containsAll(req.TextBody, "123456", "15 minutes", "https://example.com/verify?token=t&state=s") {
+		t.Fatalf("text body missing rendered values: %q", req.TextBody)
+	}
+	if !containsAll(req.HTMLBody, "123456", "15 minutes", "https://example.com/verify?token=t&amp;state=s") {
+		t.Fatalf("html body missing rendered values: %q", req.HTMLBody)
+	}
+}
+
+func TestRun_MissingTemplateVariablesMarksFailed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &fakeQueue{
+		resps: []queueResp{{
+			ok: true,
+			job: EmailJob{
+				RecordID:  "rec-render-2",
+				To:        "user@example.com",
+				Subject:   "Verify your email",
+				OTP:       "123456",
+				MagicLink: "",
+				ExpiresIn: "15 minutes",
+			},
+		}},
+	}
+	s := &fakeSender{}
+	st := &fakeStore{onMarkFailed: cancel}
+
+	c := &Consumer{Queue: q, QueueName: "email:send", Timeout: 5 * time.Second, Sender: s, Store: st}
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(s.requests) != 0 {
+		t.Fatalf("send requests=%d want=0", len(s.requests))
+	}
+	if len(st.failed) != 1 {
+		t.Fatalf("failed records=%d want=1", len(st.failed))
+	}
+	if !containsAll(st.failed[0].reason, ErrInvalidJob.Error(), ErrEmptyMagic.Error()) {
+		t.Fatalf("unexpected fail reason=%q", st.failed[0].reason)
+	}
+}
+
 func TestRun_DecodeErrorIsDroppedAndLoopContinues(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -263,6 +341,8 @@ func TestRun_DecodeErrorIsDroppedAndLoopContinues(t *testing.T) {
 				job: EmailJob{
 					RecordID: "rec-4",
 					To:       "user@example.com",
+					HTMLBody: "<p>hello</p>",
+					TextBody: "hello",
 				},
 			},
 		},
@@ -288,6 +368,15 @@ func TestRun_DecodeErrorIsDroppedAndLoopContinues(t *testing.T) {
 	if len(s.requests) != 1 {
 		t.Fatalf("send requests=%d want=1", len(s.requests))
 	}
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRun_StopsGracefullyOnContextCancel(t *testing.T) {
@@ -375,7 +464,7 @@ func TestRun_WithRedisQueue_InvalidJSONDroppedThenProcessesNextJob(t *testing.T)
 	}
 
 	redisMock.ExpectBLPop(5*time.Second, "email:send").SetVal([]string{"email:send", "not-json"})
-	redisMock.ExpectBLPop(5*time.Second, "email:send").SetVal([]string{"email:send", `{"record_id":"rec-redis-2","to":"team@example.com"}`})
+	redisMock.ExpectBLPop(5*time.Second, "email:send").SetVal([]string{"email:send", `{"record_id":"rec-redis-2","to":"team@example.com","html_body":"<p>hello</p>","text_body":"hello"}`})
 
 	s := &fakeSender{
 		resps: []senderResp{{externalID: "esp-redis-2"}},
