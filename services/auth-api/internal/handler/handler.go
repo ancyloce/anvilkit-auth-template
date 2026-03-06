@@ -115,6 +115,12 @@ func (h *Handler) Bootstrap(c *gin.Context) error {
 		if errors.Is(err, store.ErrBootstrapPasswordMismatch) {
 			return apperr.Unauthorized(err).WithData(map[string]any{"reason": "owner_password_mismatch"})
 		}
+		if errors.Is(err, store.ErrBootstrapEmailUnverified) {
+			return apperr.Forbidden(err).WithData(map[string]any{
+				"reason":  "email_not_verified",
+				"message": "Please verify your email before bootstrapping a tenant.",
+			})
+		}
 		if errors.Is(err, store.ErrTenantNameConflict) {
 			return apperr.Conflict(err).WithData(map[string]any{"reason": "tenant_name_conflict"})
 		}
@@ -551,6 +557,12 @@ func (h *Handler) Login(c *gin.Context) error {
 	if crypto.VerifyPassword(user.PasswordHash, req.Password) != nil {
 		h.increaseLoginFailCount(c, key)
 		return apperr.Unauthorized(errors.New("invalid_credentials"))
+	}
+	if user.EmailVerifiedAt == nil {
+		return apperr.Forbidden(errors.New("email_not_verified")).WithData(map[string]any{
+			"reason":  "email_not_verified",
+			"message": "Please verify your email before logging in.",
+		})
 	}
 
 	at, rt, err := h.issueTokens(c, user.ID, "", c.GetHeader("User-Agent"), ip)

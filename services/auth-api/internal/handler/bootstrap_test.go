@@ -11,6 +11,7 @@ import (
 
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/errcode"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/ginmid"
+	"anvilkit-auth-template/services/auth-api/internal/auth/crypto"
 	"anvilkit-auth-template/services/auth-api/internal/testutil"
 )
 
@@ -106,6 +107,48 @@ func TestBootstrapTenantNameConflict(t *testing.T) {
 	decodeResponse(t, res, &body)
 	if body.Code != errcode.Conflict || body.Data.Reason != "tenant_name_conflict" {
 		t.Fatalf("unexpected conflict body: %+v", body)
+	}
+}
+
+func TestBootstrapFailsWhenExistingOwnerEmailIsUnverified(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+
+	r := newBootstrapRouter(t, db, rdb)
+	hash, err := crypto.HashPassword("Passw0rd!", 4)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	_, err = db.Exec(context.Background(), `
+insert into users(id,email,status,email_verified_at,created_at,updated_at)
+values($1,$2,1,null,now(),now())`, "bootstrap-unverified", "owner@example.com")
+	if err != nil {
+		t.Fatalf("insert unverified owner: %v", err)
+	}
+	_, err = db.Exec(context.Background(), `insert into user_password_credentials(user_id,password_hash,updated_at) values($1,$2,now())`, "bootstrap-unverified", hash)
+	if err != nil {
+		t.Fatalf("insert credential: %v", err)
+	}
+
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/bootstrap", map[string]string{
+		"tenant_name":    "Acme",
+		"owner_email":    "owner@example.com",
+		"owner_password": "Passw0rd!",
+	})
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", res.Code, http.StatusForbidden, res.Body.String())
+	}
+	var body struct {
+		Code int `json:"code"`
+		Data struct {
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	decodeResponse(t, res, &body)
+	if body.Code != errcode.Forbidden || body.Data.Reason != "email_not_verified" {
+		t.Fatalf("unexpected response: %+v", body)
 	}
 }
 

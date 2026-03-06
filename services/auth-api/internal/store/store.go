@@ -22,6 +22,7 @@ var (
 	ErrRefreshExpired            = errors.New("refresh_expired")
 	ErrRefreshSessionRevoked     = errors.New("session_revoked")
 	ErrBootstrapPasswordMismatch = errors.New("bootstrap_password_mismatch")
+	ErrBootstrapEmailUnverified  = errors.New("bootstrap_email_not_verified")
 	ErrTenantNameConflict        = errors.New("tenant_name_conflict")
 	ErrNotInTenant               = errors.New("not_in_tenant")
 	ErrInvalidVerificationOTP    = errors.New("invalid_verification_otp")
@@ -79,10 +80,11 @@ type ResendVerificationResult struct {
 }
 
 type LoginUser struct {
-	ID           string
-	Email        string
-	Status       int16
-	PasswordHash string
+	ID              string
+	Email           string
+	Status          int16
+	EmailVerifiedAt *time.Time
+	PasswordHash    string
 }
 
 func (s *Store) Register(ctx context.Context, email, password string, bcryptCost int) (*RegisteredUser, error) {
@@ -505,12 +507,15 @@ func (s *Store) Bootstrap(ctx context.Context, email, password, tenantName strin
 	}()
 
 	uid := ""
-	var pwdHash *string
+	var (
+		pwdHash         *string
+		emailVerifiedAt *time.Time
+	)
 	err = tx.QueryRow(ctx, `
-select u.id, upc.password_hash
+select u.id, upc.password_hash, u.email_verified_at
 from users u
 left join user_password_credentials upc on upc.user_id = u.id
-where u.email=$1`, email).Scan(&uid, &pwdHash)
+where u.email=$1`, email).Scan(&uid, &pwdHash, &emailVerifiedAt)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return nil, err
@@ -520,7 +525,7 @@ where u.email=$1`, email).Scan(&uid, &pwdHash)
 		if hErr != nil {
 			return nil, hErr
 		}
-		if _, err = tx.Exec(ctx, `insert into users(id,email,status,created_at,updated_at) values($1,$2,1,now(),now())`, uid, email); err != nil {
+		if _, err = tx.Exec(ctx, `insert into users(id,email,status,email_verified_at,created_at,updated_at) values($1,$2,1,now(),now(),now())`, uid, email); err != nil {
 			return nil, err
 		}
 		if _, err = tx.Exec(ctx, `insert into user_password_credentials(user_id,password_hash,updated_at) values($1,$2,now())`, uid, h); err != nil {
@@ -529,6 +534,12 @@ where u.email=$1`, email).Scan(&uid, &pwdHash)
 	} else {
 		if pwdHash == nil || crypto.VerifyPassword(*pwdHash, password) != nil {
 			return nil, ErrBootstrapPasswordMismatch
+		}
+		if emailVerifiedAt == nil {
+			return nil, ErrBootstrapEmailUnverified
+		}
+		if _, err = tx.Exec(ctx, `update users set status=1,updated_at=now() where id=$1`, uid); err != nil {
+			return nil, err
 		}
 	}
 
@@ -556,10 +567,10 @@ where u.email=$1`, email).Scan(&uid, &pwdHash)
 func (s *Store) GetLoginUserByEmail(ctx context.Context, email string) (*LoginUser, error) {
 	var user LoginUser
 	err := s.DB.QueryRow(ctx, `
-select u.id, u.email, u.status, upc.password_hash
+select u.id, u.email, u.status, u.email_verified_at, upc.password_hash
 from users u
 join user_password_credentials upc on upc.user_id = u.id
-where u.email=$1`, email).Scan(&user.ID, &user.Email, &user.Status, &user.PasswordHash)
+where u.email=$1`, email).Scan(&user.ID, &user.Email, &user.Status, &user.EmailVerifiedAt, &user.PasswordHash)
 	if err != nil {
 		return nil, err
 	}

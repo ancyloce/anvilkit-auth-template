@@ -25,7 +25,7 @@ func TestLoginSuccess(t *testing.T) {
 	testutil.TruncateAuthTables(t, db)
 	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
 
-	seedLoginUser(t, db, "login-ok@example.com", "Passw0rd!", 1)
+	seedLoginUser(t, db, "login-ok@example.com", "Passw0rd!", 1, true)
 	r := newLoginRouter(t, db, rdb)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
 		"email":    "login-ok@example.com",
@@ -89,7 +89,7 @@ func TestLoginWrongPasswordUnauthorizedAndIncr(t *testing.T) {
 	testutil.TruncateAuthTables(t, db)
 	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
 
-	seedLoginUser(t, db, "wrong-pass@example.com", "Passw0rd!", 1)
+	seedLoginUser(t, db, "wrong-pass@example.com", "Passw0rd!", 1, true)
 	r := newLoginRouter(t, db, rdb)
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
 		"email":    "wrong-pass@example.com",
@@ -139,6 +139,41 @@ func TestLoginUserNotFoundUnauthorizedAndIncr(t *testing.T) {
 	}
 }
 
+func TestLoginUnverifiedUserForbidden(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, "login_fail:*")
+
+	seedLoginUser(t, db, "unverified@example.com", "Passw0rd!", 1, false)
+	r := newLoginRouter(t, db, rdb)
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/login", map[string]string{
+		"email":    "unverified@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", res.Code, http.StatusForbidden, res.Body.String())
+	}
+
+	var body struct {
+		Code int `json:"code"`
+		Data struct {
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	decodeResponse(t, res, &body)
+	if body.Code != errcode.Forbidden {
+		t.Fatalf("code=%d, want forbidden", body.Code)
+	}
+	if body.Data.Reason != "email_not_verified" {
+		t.Fatalf("reason=%q want=%q", body.Data.Reason, "email_not_verified")
+	}
+	if body.Data.Message != "Please verify your email before logging in." {
+		t.Fatalf("message=%q", body.Data.Message)
+	}
+}
+
 func TestLoginRateLimited(t *testing.T) {
 	db := newTestDB(t)
 	rdb := newTestRedis(t)
@@ -177,14 +212,18 @@ func newLoginRouter(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client) *gin.En
 	return r
 }
 
-func seedLoginUser(t *testing.T, db *pgxpool.Pool, email, password string, status int16) {
+func seedLoginUser(t *testing.T, db *pgxpool.Pool, email, password string, status int16, verified bool) {
 	t.Helper()
 	id := strings.ReplaceAll(email, "@", "-")
 	h, err := crypto.HashPassword(password, 4)
 	if err != nil {
 		t.Fatalf("hash password: %v", err)
 	}
-	_, err = db.Exec(context.Background(), `insert into users(id,email,status,created_at,updated_at) values($1,$2,$3,now(),now())`, id, email, status)
+	if verified {
+		_, err = db.Exec(context.Background(), `insert into users(id,email,status,email_verified_at,created_at,updated_at) values($1,$2,$3,now(),now(),now())`, id, email, status)
+	} else {
+		_, err = db.Exec(context.Background(), `insert into users(id,email,status,email_verified_at,created_at,updated_at) values($1,$2,$3,null,now(),now())`, id, email, status)
+	}
 	if err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
