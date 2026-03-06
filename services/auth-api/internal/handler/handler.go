@@ -609,18 +609,18 @@ func (h *Handler) Login(c *gin.Context) error {
 		}
 		return err
 	}
+	if user.EmailVerifiedAt == nil {
+		return apperr.Forbidden(errors.New("email_not_verified")).WithData(map[string]any{
+			"reason":  "email_not_verified",
+			"message": "Please verify your email before logging in.",
+		})
+	}
 	if user.Status != userStatusActive {
 		return apperr.Unauthorized(errors.New("invalid_credentials"))
 	}
 	if crypto.VerifyPassword(user.PasswordHash, req.Password) != nil {
 		h.increaseLoginFailCount(c, key)
 		return apperr.Unauthorized(errors.New("invalid_credentials"))
-	}
-	if user.EmailVerifiedAt == nil {
-		return apperr.Forbidden(errors.New("email_not_verified")).WithData(map[string]any{
-			"reason":  "email_not_verified",
-			"message": "Please verify your email before logging in.",
-		})
 	}
 
 	at, rt, err := h.issueTokens(c, user.ID, "", c.GetHeader("User-Agent"), ip)

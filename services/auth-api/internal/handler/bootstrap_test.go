@@ -126,7 +126,7 @@ func TestBootstrapTenantNameConflict(t *testing.T) {
 	})
 	res := performJSONRequest(t, r, http.MethodPost, "/v1/bootstrap", map[string]string{
 		"tenant_name":    "Acme",
-		"owner_email":    "owner@example.com",
+		"owner_email":    "owner2@example.com",
 		"owner_password": "Passw0rd!",
 	})
 	if res.Code != http.StatusConflict {
