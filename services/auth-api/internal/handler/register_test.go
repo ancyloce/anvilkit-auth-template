@@ -822,16 +822,6 @@ func popQueuedJob(t *testing.T, rdb *goredis.Client) (queuedEmailJob, error) {
 	}
 	return job, nil
 }
-
-func containsAll(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if !strings.Contains(s, sub) {
-			return false
-		}
-	}
-	return true
-}
-
 func findCookieByName(res *httptest.ResponseRecorder, name string) *http.Cookie {
 	for _, c := range res.Result().Cookies() {
 		if c.Name == name {
