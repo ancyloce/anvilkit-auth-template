@@ -91,8 +91,15 @@ func TestSend_SMTPError(t *testing.T) {
 		To:      "user@example.com",
 		Subject: "Subject",
 	})
-	if err == nil || err.Error() != "smtp rejected message" {
-		t.Fatalf("err=%v want=%q", err, "smtp rejected message")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var deliveryErr *DeliveryError
+	if !errors.As(err, &deliveryErr) {
+		t.Fatalf("err=%T want *DeliveryError", err)
+	}
+	if !errors.Is(err, smtp.err) {
+		t.Fatalf("err should unwrap smtp err: %v", err)
 	}
 	if id != "" {
 		t.Fatalf("id=%q want empty", id)

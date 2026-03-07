@@ -129,7 +129,7 @@ func mustTestDB(t *testing.T) *pgxpool.Pool {
 
 func applyMigrations(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
-	for _, name := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql", "004_email_service.sql", "005_email_verifications_token_hash_scope.sql"} {
+	for _, name := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql", "004_email_service.sql", "005_email_verifications_token_hash_scope.sql", "006_email_blacklist.sql"} {
 		sqlPath := filepath.Join(migrationsDir(t), name)
 		sqlBytes, err := os.ReadFile(sqlPath)
 		if err != nil {
@@ -148,7 +148,8 @@ truncate table
   email_status_history,
   email_records,
   email_jobs,
-  email_verifications
+  email_verifications,
+  email_blacklist
 restart identity cascade`); err != nil {
 		t.Fatalf("truncate email tables: %v", err)
 	}
@@ -165,4 +166,55 @@ func migrationsDir(t *testing.T) string {
 		t.Fatalf("migrations dir not found: %s (%v)", dir, err)
 	}
 	return dir
+}
+
+func TestMarkBounced_StoresBounceMeta(t *testing.T) {
+	db := mustTestDB(t)
+	truncateEmailTables(t, db)
+
+	recordID := "rec-mark-bounced"
+	if _, err := db.Exec(context.Background(), `
+insert into email_records(id,to_email,status,created_at,updated_at)
+values($1,$2,'queued',now(),now())`,
+		recordID,
+		"user@example.com",
+	); err != nil {
+		t.Fatalf("insert email record: %v", err)
+	}
+
+	s := &Store{DB: db}
+	if err := s.MarkBounced(context.Background(), recordID, "550 mailbox unavailable", "hard", 550, 0); err != nil {
+		t.Fatalf("mark bounced: %v", err)
+	}
+
+	var status, bounceType string
+	var smtpCode int
+	if err := db.QueryRow(context.Background(), `
+select status, meta->>'bounce_type', (meta->>'smtp_code')::int
+from email_status_history
+where email_record_id=$1
+order by created_at desc
+limit 1`, recordID).Scan(&status, &bounceType, &smtpCode); err != nil {
+		t.Fatalf("query status history: %v", err)
+	}
+	if status != "bounced" || bounceType != "hard" || smtpCode != 550 {
+		t.Fatalf("got status=%q bounce_type=%q smtp_code=%d", status, bounceType, smtpCode)
+	}
+}
+
+func TestBlacklistAndIsBlacklisted(t *testing.T) {
+	db := mustTestDB(t)
+	truncateEmailTables(t, db)
+
+	s := &Store{DB: db}
+	if err := s.Blacklist(context.Background(), "User@Example.com", "hard bounce"); err != nil {
+		t.Fatalf("blacklist: %v", err)
+	}
+	blacklisted, err := s.IsBlacklisted(context.Background(), "user@example.com")
+	if err != nil {
+		t.Fatalf("is blacklisted: %v", err)
+	}
+	if !blacklisted {
+		t.Fatal("expected email to be blacklisted")
+	}
 }
