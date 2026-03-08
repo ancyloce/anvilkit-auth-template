@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -232,5 +233,106 @@ values($1,$2,$3,now(),now())`,
 	)
 	if err == nil {
 		t.Fatal("expected uppercase blacklist insert to fail check constraint")
+	}
+}
+
+func TestUpsertWebhookStatusByExternalID_UpdatesRecordAndHistory(t *testing.T) {
+	db := mustTestDB(t)
+	truncateEmailTables(t, db)
+
+	recordID := "rec-webhook-status"
+	if _, err := db.Exec(context.Background(), `
+insert into email_records(id,to_email,external_id,status,created_at,updated_at)
+values($1,$2,$3,'sent',now(),now())`,
+		recordID,
+		"user@example.com",
+		"esp-webhook-1",
+	); err != nil {
+		t.Fatalf("insert email record: %v", err)
+	}
+
+	s := &Store{DB: db}
+	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "delivered", "accepted", "evt-1", map[string]any{"source": "esp"}); err != nil {
+		t.Fatalf("upsert delivered: %v", err)
+	}
+	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "opened", "opened by user", "evt-2", nil); err != nil {
+		t.Fatalf("upsert opened: %v", err)
+	}
+
+	var status string
+	if err := db.QueryRow(context.Background(), `select status from email_records where id=$1`, recordID).Scan(&status); err != nil {
+		t.Fatalf("query email_records: %v", err)
+	}
+	if status != "opened" {
+		t.Fatalf("status=%q want=opened", status)
+	}
+
+	rows, err := db.Query(context.Background(), `
+select status, meta
+from email_status_history
+where email_record_id=$1
+order by created_at asc`, recordID)
+	if err != nil {
+		t.Fatalf("query status history: %v", err)
+	}
+	defer rows.Close()
+
+	var history []string
+	for rows.Next() {
+		var status string
+		var metaRaw []byte
+		if err := rows.Scan(&status, &metaRaw); err != nil {
+			t.Fatalf("scan history: %v", err)
+		}
+		history = append(history, status)
+		var meta map[string]any
+		if err := json.Unmarshal(metaRaw, &meta); err != nil {
+			t.Fatalf("unmarshal meta: %v", err)
+		}
+		if meta["event_id"] == nil {
+			t.Fatalf("meta missing event_id for status=%s", status)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows err: %v", err)
+	}
+
+	if len(history) != 2 || history[0] != "delivered" || history[1] != "opened" {
+		t.Fatalf("history=%v want=[delivered opened]", history)
+	}
+}
+
+func TestUpsertWebhookStatusByExternalID_DuplicateEventIDIsIdempotent(t *testing.T) {
+	db := mustTestDB(t)
+	truncateEmailTables(t, db)
+
+	recordID := "rec-webhook-dup"
+	if _, err := db.Exec(context.Background(), `
+insert into email_records(id,to_email,external_id,status,created_at,updated_at)
+values($1,$2,$3,'sent',now(),now())`,
+		recordID,
+		"user@example.com",
+		"esp-webhook-dup",
+	); err != nil {
+		t.Fatalf("insert email record: %v", err)
+	}
+
+	s := &Store{DB: db}
+	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "first", "evt-dup", nil); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "duplicate", "evt-dup", nil); err != nil {
+		t.Fatalf("duplicate call: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(context.Background(), `
+select count(*)
+from email_status_history
+where email_record_id=$1 and status='delivered' and meta->>'event_id'='evt-dup'`, recordID).Scan(&count); err != nil {
+		t.Fatalf("count history: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count=%d want=1", count)
 	}
 }
