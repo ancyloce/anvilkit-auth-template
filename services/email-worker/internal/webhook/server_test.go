@@ -96,6 +96,26 @@ func TestEmailStatusWebhook_ExternalIDRequired(t *testing.T) {
 	}
 }
 
+func TestEmailStatusWebhook_InvalidEventTypeReturnsBadRequest(t *testing.T) {
+	store := &fakeStore{}
+	h, err := NewHandler(Server{Store: store, Secret: "secret"})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	payload := `{"external_id":"esp-123","event":"spam","event_id":"evt-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/email-status", bytes.NewBufferString(payload))
+	req.Header.Set(signatureHeader, sign("secret", []byte(payload)))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(store.calls) != 0 {
+		t.Fatalf("store calls=%d want=0", len(store.calls))
+	}
+}
 func sign(secret string, payload []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write(payload)
