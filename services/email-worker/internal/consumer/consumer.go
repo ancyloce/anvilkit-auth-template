@@ -17,25 +17,29 @@ import (
 )
 
 var (
-	ErrNilQueue     = errors.New("nil_queue")
-	ErrNilSender    = errors.New("nil_sender")
-	ErrNilStore     = errors.New("nil_store")
-	ErrEmptyQueue   = errors.New("empty_queue_name")
-	ErrInvalidJob   = errors.New("invalid_email_job")
-	ErrEmptyRecord  = errors.New("empty_record_id")
-	ErrEmptyToEmail = errors.New("empty_to_email")
-	ErrEmptyOTP     = errors.New("empty_otp")
-	ErrEmptyMagic   = errors.New("empty_magic_link")
-	ErrEmptyExpiry  = errors.New("empty_expires_in")
+	ErrNilQueue           = errors.New("nil_queue")
+	ErrNilSender          = errors.New("nil_sender")
+	ErrNilStore           = errors.New("nil_store")
+	ErrEmptyQueue         = errors.New("empty_queue_name")
+	ErrInvalidJob         = errors.New("invalid_email_job")
+	ErrEmptyRecord        = errors.New("empty_record_id")
+	ErrEmptyToEmail       = errors.New("empty_to_email")
+	ErrEmptyOTP           = errors.New("empty_otp")
+	ErrEmptyMagic         = errors.New("empty_magic_link")
+	ErrEmptyExpiry        = errors.New("empty_expires_in")
+	ErrEmailBlacklisted   = errors.New("email_blacklisted")
+	ErrSoftBounceExceeded = errors.New("soft_bounce_retry_exhausted")
 )
 
 var (
 	verificationHTMLTemplate = htmltemplate.Must(htmltemplate.ParseFS(emailtemplates.FS, "verification_email.html.tmpl"))
 	verificationTextTemplate = texttemplate.Must(texttemplate.ParseFS(emailtemplates.FS, "verification_email.txt.tmpl"))
+	softBounceRetryIntervals = []time.Duration{time.Hour, 4 * time.Hour, 24 * time.Hour}
 )
 
 type Queue interface {
 	DequeueIntoContext(ctx context.Context, queueName string, timeout time.Duration, out any) (bool, error)
+	EnqueueContext(ctx context.Context, queueName string, payload any) error
 }
 
 type Sender interface {
@@ -45,17 +49,31 @@ type Sender interface {
 type Store interface {
 	MarkSent(ctx context.Context, recordID, externalID string) error
 	MarkFailed(ctx context.Context, recordID, reason string) error
+	MarkBounced(ctx context.Context, recordID, reason, bounceType string, smtpCode, retryCount int) error
+	Blacklist(ctx context.Context, emailAddr, reason string) error
+	IsBlacklisted(ctx context.Context, emailAddr string) (bool, error)
+}
+
+type Scheduler interface {
+	AfterFunc(d time.Duration, f func())
+}
+
+type realScheduler struct{}
+
+func (realScheduler) AfterFunc(d time.Duration, f func()) {
+	time.AfterFunc(d, f)
 }
 
 type EmailJob struct {
-	RecordID  string `json:"record_id"`
-	To        string `json:"to"`
-	Subject   string `json:"subject"`
-	HTMLBody  string `json:"html_body"`
-	TextBody  string `json:"text_body"`
-	OTP       string `json:"otp"`
-	MagicLink string `json:"magic_link"`
-	ExpiresIn string `json:"expires_in"`
+	RecordID   string `json:"record_id"`
+	To         string `json:"to"`
+	Subject    string `json:"subject"`
+	HTMLBody   string `json:"html_body"`
+	TextBody   string `json:"text_body"`
+	OTP        string `json:"otp"`
+	MagicLink  string `json:"magic_link"`
+	ExpiresIn  string `json:"expires_in"`
+	RetryCount int    `json:"retry_count,omitempty"`
 }
 
 type Consumer struct {
@@ -64,6 +82,7 @@ type Consumer struct {
 	Timeout   time.Duration
 	Sender    Sender
 	Store     Store
+	Scheduler Scheduler
 }
 
 func (c *Consumer) Run(ctx context.Context) error {
@@ -81,6 +100,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 	}
 	if c.Timeout <= 0 {
 		c.Timeout = 5 * time.Second
+	}
+	if c.Scheduler == nil {
+		c.Scheduler = realScheduler{}
 	}
 
 	for {
@@ -121,6 +143,17 @@ func (c *Consumer) handleJob(ctx context.Context, job EmailJob) error {
 		}
 		return errors.New(reason)
 	}
+	isBlacklisted, err := c.Store.IsBlacklisted(ctx, job.To)
+	if err != nil {
+		return err
+	}
+	if isBlacklisted {
+		reason := ErrEmailBlacklisted.Error()
+		if markErr := c.Store.MarkFailed(ctx, job.RecordID, reason); markErr != nil {
+			return fmt.Errorf("%s; mark failed: %v", reason, markErr)
+		}
+		return ErrEmailBlacklisted
+	}
 
 	htmlBody := job.HTMLBody
 	textBody := job.TextBody
@@ -137,17 +170,9 @@ func (c *Consumer) handleJob(ctx context.Context, job EmailJob) error {
 		textBody = renderedText
 	}
 
-	externalID, err := c.Sender.Send(ctx, sender.Request{
-		To:       job.To,
-		Subject:  job.Subject,
-		HTMLBody: htmlBody,
-		TextBody: textBody,
-	})
+	externalID, err := c.Sender.Send(ctx, sender.Request{To: job.To, Subject: job.Subject, HTMLBody: htmlBody, TextBody: textBody})
 	if err != nil {
-		if markErr := c.Store.MarkFailed(ctx, job.RecordID, err.Error()); markErr != nil {
-			return fmt.Errorf("send email: %w; mark failed: %v", err, markErr)
-		}
-		return err
+		return c.handleDeliveryError(ctx, job, err)
 	}
 
 	if err := c.Store.MarkSent(ctx, job.RecordID, externalID); err != nil {
@@ -155,6 +180,52 @@ func (c *Consumer) handleJob(ctx context.Context, job EmailJob) error {
 	}
 
 	return nil
+}
+
+func (c *Consumer) handleDeliveryError(ctx context.Context, job EmailJob, sendErr error) error {
+	var deliveryErr *sender.DeliveryError
+	if !errors.As(sendErr, &deliveryErr) || deliveryErr.Classification.Type == sender.BounceTypeNone {
+		if markErr := c.Store.MarkFailed(ctx, job.RecordID, sendErr.Error()); markErr != nil {
+			return fmt.Errorf("send email: %w; mark failed: %v", sendErr, markErr)
+		}
+		return sendErr
+	}
+
+	smtpCode := deliveryErr.Classification.SMTPCode
+	switch deliveryErr.Classification.Type {
+	case sender.BounceTypeHard:
+		if err := c.Store.MarkBounced(ctx, job.RecordID, sendErr.Error(), string(sender.BounceTypeHard), smtpCode, job.RetryCount); err != nil {
+			return err
+		}
+		if err := c.Store.Blacklist(ctx, job.To, sendErr.Error()); err != nil {
+			return err
+		}
+		return sendErr
+	case sender.BounceTypeSoft:
+		if err := c.Store.MarkBounced(ctx, job.RecordID, sendErr.Error(), string(sender.BounceTypeSoft), smtpCode, job.RetryCount); err != nil {
+			return err
+		}
+		if job.RetryCount >= len(softBounceRetryIntervals) {
+			if err := c.Store.MarkFailed(ctx, job.RecordID, ErrSoftBounceExceeded.Error()); err != nil {
+				return err
+			}
+			return ErrSoftBounceExceeded
+		}
+		delay := softBounceRetryIntervals[job.RetryCount]
+		retryJob := job
+		retryJob.RetryCount++
+		c.Scheduler.AfterFunc(delay, func() {
+			if err := c.Queue.EnqueueContext(context.Background(), c.QueueName, retryJob); err != nil {
+				log.Printf("email-worker: failed to enqueue soft-bounce retry record_id=%q: %v", job.RecordID, err)
+			}
+		})
+		return sendErr
+	default:
+		if markErr := c.Store.MarkFailed(ctx, job.RecordID, sendErr.Error()); markErr != nil {
+			return fmt.Errorf("send email: %w; mark failed: %v", sendErr, markErr)
+		}
+		return sendErr
+	}
 }
 
 func renderVerificationEmailBody(job EmailJob) (string, string, error) {
@@ -171,11 +242,7 @@ func renderVerificationEmailBody(job EmailJob) (string, string, error) {
 		OTP       string
 		MagicLink string
 		ExpiresIn string
-	}{
-		OTP:       job.OTP,
-		MagicLink: job.MagicLink,
-		ExpiresIn: job.ExpiresIn,
-	}
+	}{OTP: job.OTP, MagicLink: job.MagicLink, ExpiresIn: job.ExpiresIn}
 
 	var htmlBody bytes.Buffer
 	if err := verificationHTMLTemplate.Execute(&htmlBody, data); err != nil {
