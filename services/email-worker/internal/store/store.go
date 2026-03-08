@@ -153,7 +153,7 @@ func (s *Store) IsBlacklisted(ctx context.Context, emailAddr string) (bool, erro
 		return false, ErrEmptyEmail
 	}
 	var exists bool
-	if err := s.DB.QueryRow(ctx, `select exists(select 1 from email_blacklist where email=$1)`, emailAddr).Scan(&exists); err != nil {
+	if err := s.DB.QueryRow(ctx, `select exists(select 1 from email_blacklist where lower(email)=lower($1))`, emailAddr).Scan(&exists); err != nil {
 		return false, err
 	}
 	return exists, nil

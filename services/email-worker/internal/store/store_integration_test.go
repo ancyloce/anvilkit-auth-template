@@ -129,7 +129,7 @@ func mustTestDB(t *testing.T) *pgxpool.Pool {
 
 func applyMigrations(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
-	for _, name := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql", "004_email_service.sql", "005_email_verifications_token_hash_scope.sql", "006_email_blacklist.sql"} {
+	for _, name := range []string{"001_init.sql", "002_authn_core.sql", "003_multitenant.sql", "004_email_service.sql", "005_email_verifications_token_hash_scope.sql", "006_email_blacklist.sql", "007_email_blacklist_normalization.sql"} {
 		sqlPath := filepath.Join(migrationsDir(t), name)
 		sqlBytes, err := os.ReadFile(sqlPath)
 		if err != nil {
@@ -216,5 +216,21 @@ func TestBlacklistAndIsBlacklisted(t *testing.T) {
 	}
 	if !blacklisted {
 		t.Fatal("expected email to be blacklisted")
+	}
+}
+
+func TestEmailBlacklistSchema_RejectsUppercaseEmail(t *testing.T) {
+	db := mustTestDB(t)
+	truncateEmailTables(t, db)
+
+	_, err := db.Exec(context.Background(), `
+insert into email_blacklist(id,email,reason,created_at,updated_at)
+values($1,$2,$3,now(),now())`,
+		"bl-uppercase",
+		"User@Example.com",
+		"manual insert",
+	)
+	if err == nil {
+		t.Fatal("expected uppercase blacklist insert to fail check constraint")
 	}
 }
