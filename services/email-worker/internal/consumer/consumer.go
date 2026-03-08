@@ -32,9 +32,10 @@ var (
 )
 
 var (
-	verificationHTMLTemplate = htmltemplate.Must(htmltemplate.ParseFS(emailtemplates.FS, "verification_email.html.tmpl"))
-	verificationTextTemplate = texttemplate.Must(texttemplate.ParseFS(emailtemplates.FS, "verification_email.txt.tmpl"))
-	softBounceRetryIntervals = []time.Duration{time.Hour, 4 * time.Hour, 24 * time.Hour}
+	verificationHTMLTemplate   = htmltemplate.Must(htmltemplate.ParseFS(emailtemplates.FS, "verification_email.html.tmpl"))
+	verificationTextTemplate   = texttemplate.Must(texttemplate.ParseFS(emailtemplates.FS, "verification_email.txt.tmpl"))
+	softBounceRetryIntervals   = []time.Duration{time.Hour, 4 * time.Hour, 24 * time.Hour}
+	defaultRetryEnqueueTimeout = 5 * time.Second
 )
 
 type Queue interface {
@@ -77,12 +78,13 @@ type EmailJob struct {
 }
 
 type Consumer struct {
-	Queue     Queue
-	QueueName string
-	Timeout   time.Duration
-	Sender    Sender
-	Store     Store
-	Scheduler Scheduler
+	Queue               Queue
+	QueueName           string
+	Timeout             time.Duration
+	Sender              Sender
+	Store               Store
+	Scheduler           Scheduler
+	RetryEnqueueTimeout time.Duration
 }
 
 func (c *Consumer) Run(ctx context.Context) error {
@@ -103,6 +105,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 	}
 	if c.Scheduler == nil {
 		c.Scheduler = realScheduler{}
+	}
+	if c.RetryEnqueueTimeout <= 0 {
+		c.RetryEnqueueTimeout = defaultRetryEnqueueTimeout
 	}
 
 	for {
@@ -218,7 +223,9 @@ func (c *Consumer) handleDeliveryError(ctx context.Context, job EmailJob, sendEr
 		retryJob := job
 		retryJob.RetryCount++
 		c.Scheduler.AfterFunc(delay, func() {
-			if err := c.Queue.EnqueueContext(context.Background(), c.QueueName, retryJob); err != nil {
+			retryCtx, cancel := context.WithTimeout(ctx, c.RetryEnqueueTimeout)
+			defer cancel()
+			if err := c.Queue.EnqueueContext(retryCtx, c.QueueName, retryJob); err != nil {
 				log.Printf("email-worker: failed to enqueue soft-bounce retry record_id=%q: %v", job.RecordID, err)
 			}
 		})

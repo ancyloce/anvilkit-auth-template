@@ -21,10 +21,11 @@ type queueResp struct {
 }
 
 type fakeQueue struct {
-	mu       sync.Mutex
-	resps    []queueResp
-	timeouts []time.Duration
-	enqueued []EmailJob
+	mu                 sync.Mutex
+	resps              []queueResp
+	timeouts           []time.Duration
+	enqueued           []EmailJob
+	enqueueHasDeadline []bool
 }
 
 func (q *fakeQueue) DequeueIntoContext(ctx context.Context, queueName string, timeout time.Duration, out any) (bool, error) {
@@ -52,7 +53,7 @@ func (q *fakeQueue) DequeueIntoContext(ctx context.Context, queueName string, ti
 	return false, ctx.Err()
 }
 
-func (q *fakeQueue) EnqueueContext(_ context.Context, _ string, payload any) error {
+func (q *fakeQueue) EnqueueContext(ctx context.Context, _ string, payload any) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	job, ok := payload.(EmailJob)
@@ -60,6 +61,8 @@ func (q *fakeQueue) EnqueueContext(_ context.Context, _ string, payload any) err
 		return errors.New("unexpected payload type")
 	}
 	q.enqueued = append(q.enqueued, job)
+	_, hasDeadline := ctx.Deadline()
+	q.enqueueHasDeadline = append(q.enqueueHasDeadline, hasDeadline)
 	return nil
 }
 
@@ -588,7 +591,7 @@ func TestRun_SoftBounceRetriesWithExpectedIntervals(t *testing.T) {
 	st := &fakeStore{}
 	sch := &fakeScheduler{autoRun: true}
 
-	c := &Consumer{Queue: q, QueueName: "email:send", Timeout: time.Second, Sender: s, Store: st, Scheduler: sch}
+	c := &Consumer{Queue: q, QueueName: "email:send", Timeout: time.Second, Sender: s, Store: st, Scheduler: sch, RetryEnqueueTimeout: 2 * time.Second}
 	go func() {
 		time.Sleep(20 * time.Millisecond)
 		cancel()
@@ -603,6 +606,9 @@ func TestRun_SoftBounceRetriesWithExpectedIntervals(t *testing.T) {
 	}
 	if len(q.enqueued) != 1 || q.enqueued[0].RetryCount != 1 {
 		t.Fatalf("enqueued=%+v want retry_count=1", q.enqueued)
+	}
+	if len(q.enqueueHasDeadline) != 1 || !q.enqueueHasDeadline[0] {
+		t.Fatalf("enqueue contexts should include timeout deadline: %+v", q.enqueueHasDeadline)
 	}
 }
 
