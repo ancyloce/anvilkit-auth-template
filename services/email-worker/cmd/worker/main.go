@@ -67,6 +67,8 @@ func main() {
 		Addr:              cfg.WebhookAddr,
 		Handler:           webhookHandler,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
 	}
 
 	g, gctx := errgroup.WithContext(ctx)
