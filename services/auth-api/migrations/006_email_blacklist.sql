@@ -8,5 +8,3 @@ create table if not exists email_blacklist (
   updated_at timestamptz not null default now()
 );
 
-create index if not exists idx_email_blacklist_email
-  on email_blacklist(email);
