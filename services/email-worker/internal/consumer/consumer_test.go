@@ -24,6 +24,7 @@ type fakeQueue struct {
 	mu       sync.Mutex
 	resps    []queueResp
 	timeouts []time.Duration
+	enqueued []EmailJob
 }
 
 func (q *fakeQueue) DequeueIntoContext(ctx context.Context, queueName string, timeout time.Duration, out any) (bool, error) {
@@ -51,6 +52,17 @@ func (q *fakeQueue) DequeueIntoContext(ctx context.Context, queueName string, ti
 	return false, ctx.Err()
 }
 
+func (q *fakeQueue) EnqueueContext(_ context.Context, _ string, payload any) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	job, ok := payload.(EmailJob)
+	if !ok {
+		return errors.New("unexpected payload type")
+	}
+	q.enqueued = append(q.enqueued, job)
+	return nil
+}
+
 type senderResp struct {
 	externalID string
 	err        error
@@ -75,9 +87,14 @@ func (s *fakeSender) Send(_ context.Context, req sender.Request) (string, error)
 }
 
 type fakeStore struct {
-	mu           sync.Mutex
-	sent         []struct{ recordID, externalID string }
-	failed       []struct{ recordID, reason string }
+	mu      sync.Mutex
+	sent    []struct{ recordID, externalID string }
+	failed  []struct{ recordID, reason string }
+	bounced []struct {
+		recordID, reason, bounceType string
+		smtpCode, retryCount         int
+	}
+	blacklisted  map[string]bool
 	markSentErr  error
 	markFailErr  error
 	onMarkSent   func()
@@ -106,6 +123,35 @@ func (s *fakeStore) MarkFailed(_ context.Context, recordID, reason string) error
 		cb()
 	}
 	return err
+}
+
+func (s *fakeStore) MarkBounced(_ context.Context, recordID, reason, bounceType string, smtpCode, retryCount int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bounced = append(s.bounced, struct {
+		recordID, reason, bounceType string
+		smtpCode, retryCount         int
+	}{recordID: recordID, reason: reason, bounceType: bounceType, smtpCode: smtpCode, retryCount: retryCount})
+	return nil
+}
+
+func (s *fakeStore) Blacklist(_ context.Context, emailAddr, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.blacklisted == nil {
+		s.blacklisted = map[string]bool{}
+	}
+	s.blacklisted[strings.ToLower(strings.TrimSpace(emailAddr))] = true
+	return nil
+}
+
+func (s *fakeStore) IsBlacklisted(_ context.Context, emailAddr string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.blacklisted == nil {
+		return false, nil
+	}
+	return s.blacklisted[strings.ToLower(strings.TrimSpace(emailAddr))], nil
 }
 
 func TestRun_DefaultTimeoutAndSuccessPath(t *testing.T) {
@@ -492,5 +538,112 @@ func TestRun_WithRedisQueue_InvalidJSONDroppedThenProcessesNextJob(t *testing.T)
 	}
 	if len(st.sent) != 1 || st.sent[0].recordID != "rec-redis-2" {
 		t.Fatalf("sent=%+v want record_id=rec-redis-2", st.sent)
+	}
+}
+
+type fakeScheduler struct {
+	delays  []time.Duration
+	autoRun bool
+}
+
+func (s *fakeScheduler) AfterFunc(d time.Duration, f func()) {
+	s.delays = append(s.delays, d)
+	if s.autoRun {
+		f()
+	}
+}
+
+func TestRun_HardBounceBlacklistsAndNoRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &fakeQueue{resps: []queueResp{{ok: true, job: EmailJob{RecordID: "rec-hard", To: "user@example.com", HTMLBody: "<p>h</p>", TextBody: "h"}}}}
+	s := &fakeSender{resps: []senderResp{{err: &sender.DeliveryError{Cause: errors.New("550 mailbox unavailable"), Classification: sender.BounceClassification{Type: sender.BounceTypeHard, SMTPCode: 550}}}}}
+	st := &fakeStore{}
+
+	c := &Consumer{Queue: q, QueueName: "email:send", Timeout: time.Second, Sender: s, Store: st, Scheduler: &fakeScheduler{autoRun: true}}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	_ = c.Run(ctx)
+
+	if len(st.bounced) != 1 || st.bounced[0].bounceType != "hard" || st.bounced[0].smtpCode != 550 {
+		t.Fatalf("unexpected bounced=%+v", st.bounced)
+	}
+	if !st.blacklisted["user@example.com"] {
+		t.Fatalf("expected address blacklisted: %+v", st.blacklisted)
+	}
+	if len(q.enqueued) != 0 {
+		t.Fatalf("unexpected retries enqueued=%d", len(q.enqueued))
+	}
+}
+
+func TestRun_SoftBounceRetriesWithExpectedIntervals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &fakeQueue{resps: []queueResp{{ok: true, job: EmailJob{RecordID: "rec-soft", To: "user@example.com", HTMLBody: "<p>h</p>", TextBody: "h"}}}}
+	s := &fakeSender{resps: []senderResp{{err: &sender.DeliveryError{Cause: errors.New("451 mailbox busy"), Classification: sender.BounceClassification{Type: sender.BounceTypeSoft, SMTPCode: 451}}}}}
+	st := &fakeStore{}
+	sch := &fakeScheduler{autoRun: true}
+
+	c := &Consumer{Queue: q, QueueName: "email:send", Timeout: time.Second, Sender: s, Store: st, Scheduler: sch}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	_ = c.Run(ctx)
+
+	if len(st.bounced) != 1 || st.bounced[0].bounceType != "soft" {
+		t.Fatalf("unexpected bounced=%+v", st.bounced)
+	}
+	if len(sch.delays) != 1 || sch.delays[0] != time.Hour {
+		t.Fatalf("delays=%v want=[1h]", sch.delays)
+	}
+	if len(q.enqueued) != 1 || q.enqueued[0].RetryCount != 1 {
+		t.Fatalf("enqueued=%+v want retry_count=1", q.enqueued)
+	}
+}
+
+func TestHandleDeliveryError_SoftBounceScheduledReturnsNil(t *testing.T) {
+	q := &fakeQueue{}
+	c := &Consumer{Store: &fakeStore{}, Queue: q, QueueName: "email:send", Scheduler: &fakeScheduler{autoRun: true}}
+	err := c.handleDeliveryError(
+		context.Background(),
+		EmailJob{RecordID: "rec-soft-nil", To: "user@example.com", RetryCount: 0},
+		&sender.DeliveryError{Cause: errors.New("451 mailbox busy"), Classification: sender.BounceClassification{Type: sender.BounceTypeSoft, SMTPCode: 451}},
+	)
+	if err != nil {
+		t.Fatalf("err=%v want nil", err)
+	}
+	if len(q.enqueued) != 1 || q.enqueued[0].RetryCount != 1 {
+		t.Fatalf("enqueued=%+v want one retry with retry_count=1", q.enqueued)
+	}
+}
+
+func TestHandleDeliveryError_SoftBounceRetryExhaustedAfterThreeRetries(t *testing.T) {
+	c := &Consumer{Store: &fakeStore{}, Queue: &fakeQueue{}, QueueName: "email:send", Scheduler: &fakeScheduler{}}
+	err := c.handleDeliveryError(context.Background(), EmailJob{RecordID: "rec-soft-exhausted", To: "user@example.com", RetryCount: 3}, &sender.DeliveryError{Cause: errors.New("451 mailbox busy"), Classification: sender.BounceClassification{Type: sender.BounceTypeSoft, SMTPCode: 451}})
+	if !errors.Is(err, ErrSoftBounceExceeded) {
+		t.Fatalf("err=%v want=%v", err, ErrSoftBounceExceeded)
+	}
+}
+
+func TestRun_BlacklistedRecipientIsNotSent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &fakeQueue{resps: []queueResp{{ok: true, job: EmailJob{RecordID: "rec-bl", To: "user@example.com", HTMLBody: "<p>h</p>", TextBody: "h"}}}}
+	s := &fakeSender{}
+	st := &fakeStore{blacklisted: map[string]bool{"user@example.com": true}, onMarkFailed: cancel}
+	c := &Consumer{Queue: q, QueueName: "email:send", Timeout: time.Second, Sender: s, Store: st}
+	_ = c.Run(ctx)
+
+	if len(s.requests) != 0 {
+		t.Fatalf("send requests=%d want=0", len(s.requests))
+	}
+	if len(st.failed) != 1 || st.failed[0].reason != ErrEmailBlacklisted.Error() {
+		t.Fatalf("failed=%+v", st.failed)
 	}
 }

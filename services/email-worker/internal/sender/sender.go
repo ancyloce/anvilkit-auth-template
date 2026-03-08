@@ -3,6 +3,7 @@ package sender
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -23,6 +24,28 @@ type smtpClient interface {
 	SendEmail(to, subject, htmlBody, textBody string) error
 }
 
+type DeliveryError struct {
+	Cause          error
+	Classification BounceClassification
+}
+
+func (e *DeliveryError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "delivery_error"
+	}
+	if e.Classification.Type == BounceTypeNone {
+		return e.Cause.Error()
+	}
+	return fmt.Sprintf("%s (bounce=%s code=%d)", e.Cause.Error(), e.Classification.Type, e.Classification.SMTPCode)
+}
+
+func (e *DeliveryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 type Sender struct {
 	smtp smtpClient
 }
@@ -40,12 +63,10 @@ func (s *Sender) Send(ctx context.Context, req Request) (string, error) {
 	}
 	smtpClient := s.smtp
 	if smtpClient == nil {
-		// Preserve historical zero-value Sender behavior: return SMTP config validation
-		// errors instead of panicking when Sender is constructed directly.
 		smtpClient = email.SMTPConfig{}
 	}
 	if err := smtpClient.SendEmail(req.To, req.Subject, req.HTMLBody, req.TextBody); err != nil {
-		return "", err
+		return "", &DeliveryError{Cause: err, Classification: ClassifySMTPError(err)}
 	}
 	return uuid.NewString(), nil
 }
