@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"anvilkit-auth-template/modules/common-go/pkg/analytics"
 	"anvilkit-auth-template/modules/common-go/pkg/cache/redis"
 	"anvilkit-auth-template/modules/common-go/pkg/db/pgsql"
 	"anvilkit-auth-template/modules/common-go/pkg/queue"
@@ -27,6 +28,13 @@ func main() {
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		log.Fatal(err)
+	}
+	analyticsClient, err := analytics.NewClient(cfg.Analytics)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if !cfg.Analytics.Enabled {
+		analyticsClient = nil
 	}
 
 	db, err := pgsql.New(ctx, cfg.DBDSN)
@@ -57,9 +65,10 @@ func main() {
 		Timeout:   cfg.QueuePopTimeout,
 		Sender:    sender.New(cfg.SMTPConfig()),
 		Store:     dataStore,
+		Analytics: analyticsClient,
 	}
 
-	webhookHandler, err := webhook.NewHandler(webhook.Server{Store: dataStore, Secret: cfg.WebhookSecret})
+	webhookHandler, err := webhook.NewHandler(webhook.Server{Store: dataStore, Secret: cfg.WebhookSecret, Analytics: analyticsClient})
 	if err != nil {
 		log.Fatal(err)
 	}

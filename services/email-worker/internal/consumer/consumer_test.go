@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"anvilkit-auth-template/modules/common-go/pkg/analytics"
 	commonqueue "anvilkit-auth-template/modules/common-go/pkg/queue"
 	"anvilkit-auth-template/services/email-worker/internal/sender"
+	workerstore "anvilkit-auth-template/services/email-worker/internal/store"
 	redismock "github.com/go-redis/redismock/v9"
 )
 
@@ -94,11 +96,12 @@ type fakeStore struct {
 		recordID, reason, bounceType string
 		smtpCode, retryCount         int
 	}
-	blacklisted  map[string]bool
-	markSentErr  error
-	markFailErr  error
-	onMarkSent   func()
-	onMarkFailed func()
+	blacklisted   map[string]bool
+	analyticsByID map[string]*workerstore.AnalyticsRecord
+	markSentErr   error
+	markFailErr   error
+	onMarkSent    func()
+	onMarkFailed  func()
 }
 
 func (s *fakeStore) MarkSent(_ context.Context, recordID, externalID string) error {
@@ -152,6 +155,33 @@ func (s *fakeStore) IsBlacklisted(_ context.Context, emailAddr string) (bool, er
 		return false, nil
 	}
 	return s.blacklisted[strings.ToLower(strings.TrimSpace(emailAddr))], nil
+}
+
+func (s *fakeStore) LookupAnalyticsRecordByID(_ context.Context, recordID string) (*workerstore.AnalyticsRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.analyticsByID == nil || s.analyticsByID[recordID] == nil {
+		return nil, workerstore.ErrEmailRecordNotFound
+	}
+	record := *s.analyticsByID[recordID]
+	return &record, nil
+}
+
+type fakeAnalytics struct {
+	mu     sync.Mutex
+	events []analytics.Event
+}
+
+func (f *fakeAnalytics) Track(_ context.Context, event analytics.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	props := make(map[string]any, len(event.Properties))
+	for k, v := range event.Properties {
+		props[k] = v
+	}
+	event.Properties = props
+	f.events = append(f.events, event)
+	return nil
 }
 
 func TestRun_DefaultTimeoutAndSuccessPath(t *testing.T) {
@@ -210,6 +240,58 @@ func TestRun_DefaultTimeoutAndSuccessPath(t *testing.T) {
 	}
 }
 
+func TestRun_TracksVerificationEmailSent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &fakeQueue{
+		resps: []queueResp{{
+			ok: true,
+			job: EmailJob{
+				RecordID: "rec-analytics-sent",
+				To:       "user@example.com",
+				Subject:  "subject",
+				HTMLBody: "<p>hello</p>",
+				TextBody: "hello",
+			},
+		}},
+	}
+	s := &fakeSender{resps: []senderResp{{externalID: "esp-sent"}}}
+	tracker := &fakeAnalytics{}
+	st := &fakeStore{
+		analyticsByID: map[string]*workerstore.AnalyticsRecord{
+			"rec-analytics-sent": {UserID: "user-1", Email: "user@example.com"},
+		},
+		onMarkSent: cancel,
+	}
+
+	c := &Consumer{
+		Queue:     q,
+		QueueName: "email:send",
+		Timeout:   time.Second,
+		Sender:    s,
+		Store:     st,
+		Analytics: tracker,
+	}
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(tracker.events) != 1 {
+		t.Fatalf("event count=%d want=1", len(tracker.events))
+	}
+	event := tracker.events[0]
+	if event.Name != "verification_email_sent" {
+		t.Fatalf("event name=%q want verification_email_sent", event.Name)
+	}
+	if event.UserID != "user-1" || event.Email != "user@example.com" {
+		t.Fatalf("unexpected event identity: %+v", event)
+	}
+	if event.Timestamp.IsZero() {
+		t.Fatal("timestamp should be set")
+	}
+}
+
 func TestRun_SenderFailureMarksFailed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -255,6 +337,150 @@ func TestRun_SenderFailureMarksFailed(t *testing.T) {
 	}
 	if len(st.sent) != 0 {
 		t.Fatalf("sent records=%d want=0", len(st.sent))
+	}
+}
+
+func TestRun_HardBounceTracksBounceType(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	q := &fakeQueue{
+		resps: []queueResp{{
+			ok: true,
+			job: EmailJob{
+				RecordID: "rec-hard-bounce",
+				To:       "user@example.com",
+				HTMLBody: "<p>hello</p>",
+				TextBody: "hello",
+			},
+		}},
+	}
+	s := &fakeSender{
+		resps: []senderResp{{
+			err: &sender.DeliveryError{
+				Cause: errors.New("smtp 550 mailbox unavailable"),
+				Classification: sender.BounceClassification{
+					Type:     sender.BounceTypeHard,
+					SMTPCode: 550,
+				},
+			},
+		}},
+	}
+	tracker := &fakeAnalytics{}
+	st := &fakeStore{
+		analyticsByID: map[string]*workerstore.AnalyticsRecord{
+			"rec-hard-bounce": {UserID: "user-2", Email: "user@example.com"},
+		},
+	}
+
+	c := &Consumer{
+		Queue:     q,
+		QueueName: "email:send",
+		Timeout:   time.Second,
+		Sender:    s,
+		Store:     st,
+		Analytics: tracker,
+	}
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(tracker.events) != 1 {
+		t.Fatalf("event count=%d want=1", len(tracker.events))
+	}
+	event := tracker.events[0]
+	if event.Name != "verification_email_bounced" {
+		t.Fatalf("event name=%q want verification_email_bounced", event.Name)
+	}
+	if event.Properties["bounce_type"] != "hard" {
+		t.Fatalf("bounce_type=%v want hard", event.Properties["bounce_type"])
+	}
+	if event.UserID != "user-2" || event.Email != "user@example.com" {
+		t.Fatalf("unexpected event identity: %+v", event)
+	}
+}
+
+func TestRun_SkipsAnalyticsWhenUserIDMissing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &fakeQueue{
+		resps: []queueResp{{
+			ok: true,
+			job: EmailJob{
+				RecordID: "rec-no-user",
+				To:       "user@example.com",
+				Subject:  "subject",
+				HTMLBody: "<p>hello</p>",
+				TextBody: "hello",
+			},
+		}},
+	}
+	s := &fakeSender{resps: []senderResp{{externalID: "esp-sent"}}}
+	tracker := &fakeAnalytics{}
+	st := &fakeStore{
+		analyticsByID: map[string]*workerstore.AnalyticsRecord{
+			"rec-no-user": {UserID: "", Email: "user@example.com"},
+		},
+		onMarkSent: cancel,
+	}
+
+	c := &Consumer{
+		Queue:     q,
+		QueueName: "email:send",
+		Timeout:   time.Second,
+		Sender:    s,
+		Store:     st,
+		Analytics: tracker,
+	}
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(tracker.events) != 0 {
+		t.Fatalf("event count=%d want=0", len(tracker.events))
+	}
+}
+
+func TestRun_SkipsAnalyticsWhenEmailMissing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &fakeQueue{
+		resps: []queueResp{{
+			ok: true,
+			job: EmailJob{
+				RecordID: "rec-no-email",
+				To:       "user@example.com",
+				Subject:  "subject",
+				HTMLBody: "<p>hello</p>",
+				TextBody: "hello",
+			},
+		}},
+	}
+	s := &fakeSender{resps: []senderResp{{externalID: "esp-sent"}}}
+	tracker := &fakeAnalytics{}
+	st := &fakeStore{
+		analyticsByID: map[string]*workerstore.AnalyticsRecord{
+			"rec-no-email": {UserID: "user-1", Email: ""},
+		},
+		onMarkSent: cancel,
+	}
+
+	c := &Consumer{
+		Queue:     q,
+		QueueName: "email:send",
+		Timeout:   time.Second,
+		Sender:    s,
+		Store:     st,
+		Analytics: tracker,
+	}
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(tracker.events) != 0 {
+		t.Fatalf("event count=%d want=0", len(tracker.events))
 	}
 }
 

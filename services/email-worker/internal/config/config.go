@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"anvilkit-auth-template/modules/common-go/pkg/analytics"
 	"anvilkit-auth-template/modules/common-go/pkg/email"
 )
 
@@ -36,6 +37,7 @@ type Config struct {
 	SMTPPassword    string
 	SMTPFromEmail   string
 	SMTPFromName    string
+	Analytics       analytics.Config
 }
 
 func LoadFromEnv() (Config, error) {
@@ -57,6 +59,10 @@ func LoadFromEnv() (Config, error) {
 		SMTPPassword:    os.Getenv("SMTP_PASSWORD"),
 		SMTPFromEmail:   getStringFromEnv("SMTP_FROM_EMAIL", defaultSMTPFromEmail),
 		SMTPFromName:    getStringFromEnv("SMTP_FROM_NAME", defaultSMTPFromName),
+	}
+	cfg.Analytics, err = analytics.LoadConfigFromEnv()
+	if err != nil {
+		return Config{}, err
 	}
 
 	if strings.TrimSpace(cfg.DBDSN) == "" {

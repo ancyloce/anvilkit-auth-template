@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,6 +24,12 @@ var (
 
 type Store struct {
 	DB *pgxpool.Pool
+}
+
+type AnalyticsRecord struct {
+	UserID string
+	Email  string
+	SentAt *time.Time
 }
 
 func (s *Store) MarkSent(ctx context.Context, recordID, externalID string) error {
@@ -160,31 +168,37 @@ func (s *Store) IsBlacklisted(ctx context.Context, emailAddr string) (bool, erro
 	return exists, nil
 }
 
-func (s *Store) UpsertWebhookStatusByExternalID(ctx context.Context, externalID, status, message, eventID string, meta map[string]any) error {
+func (s *Store) UpsertWebhookStatusByExternalID(ctx context.Context, externalID, status, message, eventID string, meta map[string]any) (bool, error) {
 	if s.DB == nil {
-		return ErrNilDB
+		return false, ErrNilDB
 	}
 	externalID = strings.TrimSpace(externalID)
 	if externalID == "" {
-		return ErrEmptyExternalID
+		return false, ErrEmptyExternalID
 	}
 	status = strings.TrimSpace(status)
 	if status == "" {
-		return ErrEmptyStatus
+		return false, ErrEmptyStatus
 	}
 
 	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var recordID string
-	if err := tx.QueryRow(ctx, `select id from email_records where external_id=$1 for update`, externalID).Scan(&recordID); err != nil {
+	if err := tx.QueryRow(ctx, `
+select id
+from email_records
+where external_id=$1
+order by updated_at desc, created_at desc, id desc
+limit 1
+for update`, externalID).Scan(&recordID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrEmailRecordNotFound
+			return false, ErrEmailRecordNotFound
 		}
-		return err
+		return false, err
 	}
 
 	eventID = strings.TrimSpace(eventID)
@@ -196,10 +210,13 @@ select exists(
   from email_status_history
   where email_record_id=$1 and status=$2 and meta->>'event_id'=$3
 )`, recordID, status, eventID).Scan(&exists); err != nil {
-			return err
+			return false, err
 		}
 		if exists {
-			return tx.Commit(ctx)
+			if err := tx.Commit(ctx); err != nil {
+				return false, err
+			}
+			return false, nil
 		}
 	}
 
@@ -211,16 +228,64 @@ select exists(
 	}
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if _, err := tx.Exec(ctx, `update email_records set status=$2, updated_at=now() where id=$1`, recordID, status); err != nil {
-		return err
+		return false, err
 	}
 
 	if _, err := tx.Exec(ctx, `insert into email_status_history(id,email_record_id,status,message,meta,created_at) values($1,$2,$3,$4,$5::jsonb,now())`, uuid.NewString(), recordID, status, message, string(metaJSON)); err != nil {
-		return err
+		return false, err
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) LookupAnalyticsRecordByID(ctx context.Context, recordID string) (*AnalyticsRecord, error) {
+	return s.lookupAnalyticsRecord(ctx, "er.id = $1", strings.TrimSpace(recordID))
+}
+
+func (s *Store) LookupAnalyticsRecordByExternalID(ctx context.Context, externalID string) (*AnalyticsRecord, error) {
+	return s.lookupAnalyticsRecord(ctx, "er.external_id = $1", strings.TrimSpace(externalID))
+}
+
+func (s *Store) lookupAnalyticsRecord(ctx context.Context, predicate string, value string) (*AnalyticsRecord, error) {
+	if s.DB == nil {
+		return nil, ErrNilDB
+	}
+
+	var record AnalyticsRecord
+	var userID sql.NullString
+	err := s.DB.QueryRow(ctx, `
+select
+  er.user_id,
+  er.to_email,
+  (
+    select esh.created_at
+    from email_status_history esh
+    where esh.email_record_id = er.id
+      and esh.status = 'sent'
+    order by esh.created_at desc
+    limit 1
+  ) as sent_at
+from email_records er
+where `+predicate+`
+order by er.updated_at desc, er.created_at desc, er.id desc
+limit 1`,
+		value,
+	).Scan(&userID, &record.Email, &record.SentAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrEmailRecordNotFound
+		}
+		return nil, err
+	}
+	if userID.Valid {
+		record.UserID = userID.String
+	}
+	return &record, nil
 }

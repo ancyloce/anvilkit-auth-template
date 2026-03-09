@@ -252,11 +252,19 @@ values($1,$2,$3,'sent',now(),now())`,
 	}
 
 	s := &Store{DB: db}
-	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "delivered", "accepted", "evt-1", map[string]any{"source": "esp"}); err != nil {
+	inserted, err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "delivered", "accepted", "evt-1", map[string]any{"source": "esp"})
+	if err != nil {
 		t.Fatalf("upsert delivered: %v", err)
 	}
-	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "opened", "opened by user", "evt-2", nil); err != nil {
+	if !inserted {
+		t.Fatal("inserted=false want true")
+	}
+	inserted, err = s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "opened", "opened by user", "evt-2", nil)
+	if err != nil {
 		t.Fatalf("upsert opened: %v", err)
+	}
+	if !inserted {
+		t.Fatal("inserted=false want true")
 	}
 
 	var status string
@@ -318,11 +326,19 @@ values($1,$2,$3,'sent',now(),now())`,
 	}
 
 	s := &Store{DB: db}
-	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "first", "evt-dup", nil); err != nil {
+	inserted, err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "first", "evt-dup", nil)
+	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "duplicate", "evt-dup", nil); err != nil {
+	if !inserted {
+		t.Fatal("first inserted=false want true")
+	}
+	inserted, err = s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "duplicate", "evt-dup", nil)
+	if err != nil {
 		t.Fatalf("duplicate call: %v", err)
+	}
+	if inserted {
+		t.Fatal("duplicate inserted=true want false")
 	}
 
 	var count int
@@ -334,5 +350,80 @@ where email_record_id=$1 and status='delivered' and meta->>'event_id'='evt-dup'`
 	}
 	if count != 1 {
 		t.Fatalf("count=%d want=1", count)
+	}
+}
+
+func TestLookupAnalyticsRecordByExternalIDPrefersMostRecentlyUpdatedRecord(t *testing.T) {
+	db := mustTestDB(t)
+	truncateEmailTables(t, db)
+
+	if _, err := db.Exec(context.Background(), `
+insert into users(id,email,status,created_at,updated_at)
+values
+  ('user-old','old@example.com',1,now()-interval '10 minutes',now()-interval '10 minutes'),
+  ('user-new','new@example.com',1,now()-interval '5 minutes',now()-interval '1 minute')`); err != nil {
+		t.Fatalf("insert users: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+insert into email_records(id,user_id,to_email,external_id,status,created_at,updated_at)
+values
+  ('rec-old','user-old','old@example.com','esp-shared','sent',now()-interval '10 minutes',now()-interval '10 minutes'),
+  ('rec-new','user-new','new@example.com','esp-shared','sent',now()-interval '5 minutes',now()-interval '1 minute')`); err != nil {
+		t.Fatalf("insert email records: %v", err)
+	}
+
+	s := &Store{DB: db}
+	record, err := s.LookupAnalyticsRecordByExternalID(context.Background(), "esp-shared")
+	if err != nil {
+		t.Fatalf("LookupAnalyticsRecordByExternalID: %v", err)
+	}
+	if record.UserID != "user-new" || record.Email != "new@example.com" {
+		t.Fatalf("record=%+v want newest record", record)
+	}
+}
+
+func TestUpsertWebhookStatusByExternalIDPrefersMostRecentlyUpdatedDuplicateRecord(t *testing.T) {
+	db := mustTestDB(t)
+	truncateEmailTables(t, db)
+
+	if _, err := db.Exec(context.Background(), `
+insert into users(id,email,status,created_at,updated_at)
+values
+  ('user-old-webhook','old-webhook@example.com',1,now()-interval '10 minutes',now()-interval '10 minutes'),
+  ('user-new-webhook','new-webhook@example.com',1,now()-interval '5 minutes',now()-interval '1 minute')`); err != nil {
+		t.Fatalf("insert users: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+insert into email_records(id,user_id,to_email,external_id,status,created_at,updated_at)
+values
+  ('rec-webhook-old','user-old-webhook','old-webhook@example.com','esp-dup-webhook','sent',now()-interval '10 minutes',now()-interval '10 minutes'),
+  ('rec-webhook-new','user-new-webhook','new-webhook@example.com','esp-dup-webhook','sent',now()-interval '5 minutes',now()-interval '1 minute')`); err != nil {
+		t.Fatalf("insert email records: %v", err)
+	}
+
+	s := &Store{DB: db}
+	inserted, err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-dup-webhook", "bounced", "hard bounce", "evt-webhook-dup", map[string]any{"bounce_type": "hard"})
+	if err != nil {
+		t.Fatalf("UpsertWebhookStatusByExternalID: %v", err)
+	}
+	if !inserted {
+		t.Fatal("inserted=false want true")
+	}
+
+	var newCount, oldCount int
+	if err := db.QueryRow(context.Background(), `
+select count(*)
+from email_status_history
+where email_record_id='rec-webhook-new' and status='bounced'`).Scan(&newCount); err != nil {
+		t.Fatalf("query new record history: %v", err)
+	}
+	if err := db.QueryRow(context.Background(), `
+select count(*)
+from email_status_history
+where email_record_id='rec-webhook-old' and status='bounced'`).Scan(&oldCount); err != nil {
+		t.Fatalf("query old record history: %v", err)
+	}
+	if newCount != 1 || oldCount != 0 {
+		t.Fatalf("history counts new=%d old=%d want new=1 old=0", newCount, oldCount)
 	}
 }

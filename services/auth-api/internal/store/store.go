@@ -80,6 +80,17 @@ type ResendVerificationResult struct {
 	RevokedVerifications []RevokedVerificationSnapshot
 }
 
+type AnalyticsUser struct {
+	UserID string
+	Email  string
+}
+
+type MagicLinkAnalytics struct {
+	UserID string
+	Email  string
+	SentAt *time.Time
+}
+
 type LoginUser struct {
 	ID              string
 	Email           string
@@ -331,10 +342,10 @@ where id = $1
 	return tx.Commit(ctx)
 }
 
-func (s *Store) VerifyEmailOTP(ctx context.Context, emailAddr, otp string, now time.Time) error {
+func (s *Store) VerifyEmailOTP(ctx context.Context, emailAddr, otp string, now time.Time) (bool, error) {
 	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() {
 		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
@@ -364,47 +375,51 @@ for update`,
 	).Scan(&verificationID, &userID, &storedHash, &expiresAt, &attempts)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrInvalidVerificationOTP
+			return false, ErrInvalidVerificationOTP
 		}
-		return err
+		return false, err
 	}
 
 	if attempts > maxOTPVerificationAttempts {
-		return ErrTooManyOTPAttempts
+		return false, ErrTooManyOTPAttempts
 	}
 
 	if !expiresAt.After(now) {
-		return ErrVerificationExpired
+		return false, ErrVerificationExpired
 	}
 
 	if storedHash != tokenHash {
 		attempts++
 		if _, err = tx.Exec(ctx, `update email_verifications set attempts=$2 where id=$1`, verificationID, attempts); err != nil {
-			return err
+			return false, err
 		}
 		if err = tx.Commit(ctx); err != nil {
-			return err
+			return false, err
 		}
 		if attempts > maxOTPVerificationAttempts {
-			return ErrTooManyOTPAttempts
+			return false, ErrTooManyOTPAttempts
 		}
-		return ErrInvalidVerificationOTP
+		return false, ErrInvalidVerificationOTP
 	}
 
 	if _, err = tx.Exec(ctx, `update email_verifications set verified_at=now() where id=$1`, verificationID); err != nil {
-		return err
+		return false, err
 	}
-	if _, err = tx.Exec(ctx, `update users set status=1,email_verified_at=coalesce(email_verified_at,now()),updated_at=now() where id=$1`, userID); err != nil {
-		return err
+	userUpdate, err := tx.Exec(ctx, `update users set status=1,email_verified_at=now(),updated_at=now() where id=$1 and email_verified_at is null`, userID)
+	if err != nil {
+		return false, err
 	}
 
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return userUpdate.RowsAffected() > 0, nil
 }
 
-func (s *Store) VerifyMagicLinkToken(ctx context.Context, magicToken string, now time.Time) error {
+func (s *Store) VerifyMagicLinkToken(ctx context.Context, magicToken string, now time.Time) (bool, error) {
 	tx, err := s.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() {
 		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
@@ -429,23 +444,75 @@ for update`,
 	).Scan(&verificationID, &userID, &expiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrInvalidMagicLink
+			return false, ErrInvalidMagicLink
 		}
-		return err
+		return false, err
 	}
 
 	if !expiresAt.After(now) {
-		return ErrVerificationExpired
+		return false, ErrVerificationExpired
 	}
 
 	if _, err = tx.Exec(ctx, `update email_verifications set verified_at=now() where id=$1`, verificationID); err != nil {
-		return err
+		return false, err
 	}
-	if _, err = tx.Exec(ctx, `update users set status=1,email_verified_at=coalesce(email_verified_at,now()),updated_at=now() where id=$1`, userID); err != nil {
-		return err
+	userUpdate, err := tx.Exec(ctx, `update users set status=1,email_verified_at=now(),updated_at=now() where id=$1 and email_verified_at is null`, userID)
+	if err != nil {
+		return false, err
 	}
 
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return userUpdate.RowsAffected() > 0, nil
+}
+
+func (s *Store) LookupAnalyticsUserByEmail(ctx context.Context, emailAddr string) (*AnalyticsUser, error) {
+	var user AnalyticsUser
+	err := s.DB.QueryRow(ctx, `
+select id, email
+from users
+where email = $1`,
+		emailAddr,
+	).Scan(&user.UserID, &user.Email)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (s *Store) LookupMagicLinkAnalytics(ctx context.Context, magicToken string, now time.Time) (*MagicLinkAnalytics, error) {
+	tokenHash := email.HashToken(magicToken)
+	var result MagicLinkAnalytics
+	err := s.DB.QueryRow(ctx, `
+select
+  ev.user_id,
+  u.email,
+  (
+    select esh.created_at
+    from email_status_history esh
+    join email_records er on er.id = esh.email_record_id
+    where er.user_id = ev.user_id
+      and er.template = 'verification_email'
+      and esh.status = 'sent'
+    order by esh.created_at desc
+    limit 1
+  ) as sent_at
+from email_verifications ev
+join users u on u.id = ev.user_id
+where ev.token_type = 'magic_link'
+  and ev.token_hash = $1
+  and ev.verified_at is null
+  and ev.expires_at > $2
+order by ev.created_at desc, ev.id desc
+limit 1`,
+		tokenHash,
+		now,
+	).Scan(&result.UserID, &result.Email, &result.SentAt)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func (s *Store) ValidateMagicLinkToken(ctx context.Context, magicToken string, now time.Time) error {
