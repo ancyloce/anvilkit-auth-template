@@ -375,19 +375,26 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 		return nil
 	}
 	now := time.Now()
-	if details, err := h.Store.LookupMagicLinkAnalytics(c, token); err != nil {
-		if !errors.Is(err, store.ErrInvalidMagicLink) && !errors.Is(err, pgx.ErrNoRows) {
-			log.Printf("auth-api analytics: lookup magic-link details failed: %v", err)
+	var magicLinkDetails *store.MagicLinkAnalytics
+	if h.Analytics != nil {
+		details, err := h.Store.LookupMagicLinkAnalytics(c, token)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				log.Printf("auth-api analytics: lookup magic-link details failed: %v", err)
+			}
+		} else {
+			magicLinkDetails = details
 		}
-	} else {
+	}
+	if magicLinkDetails != nil {
 		props := map[string]any{"latency_from_sent": 0}
-		if details.SentAt != nil {
-			props["latency_from_sent"] = maxInt64(0, now.UTC().Sub(details.SentAt.UTC()).Milliseconds())
+		if magicLinkDetails.SentAt != nil {
+			props["latency_from_sent"] = maxInt64(0, now.UTC().Sub(magicLinkDetails.SentAt.UTC()).Milliseconds())
 		}
 		h.track(c, analytics.Event{
 			Name:       "verification_link_clicked",
-			UserID:     details.UserID,
-			Email:      details.Email,
+			UserID:     magicLinkDetails.UserID,
+			Email:      magicLinkDetails.Email,
 			Timestamp:  now.UTC(),
 			Properties: props,
 		})
@@ -449,18 +456,18 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 		return err
 	}
 	if activatedNow {
-		if details, err := h.Store.LookupMagicLinkAnalytics(c, token); err != nil {
-			log.Printf("auth-api analytics: lookup magic-link activation details failed: %v", err)
-		} else {
+		if magicLinkDetails != nil {
 			h.track(c, analytics.Event{
 				Name:      "account_activated",
-				UserID:    details.UserID,
-				Email:     details.Email,
+				UserID:    magicLinkDetails.UserID,
+				Email:     magicLinkDetails.Email,
 				Timestamp: time.Now().UTC(),
 				Properties: map[string]any{
 					"method": "magic_link",
 				},
 			})
+		} else {
+			log.Printf("auth-api analytics: missing magic-link analytics details for activation token")
 		}
 	}
 
