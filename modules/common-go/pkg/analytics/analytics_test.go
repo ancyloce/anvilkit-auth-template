@@ -93,6 +93,43 @@ func TestMixpanelClientTrackSendsRequiredProperties(t *testing.T) {
 	}
 }
 
+func TestMixpanelClientTrackUsesNormalizedEmailForDistinctIDFallback(t *testing.T) {
+	var got []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{Enabled: true, MixpanelToken: "mp-token", Endpoint: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	err = client.Track(context.Background(), Event{
+		Name:      "verification_email_sent",
+		Email:     "  MixedCase@Example.com  ",
+		Timestamp: time.Date(2026, 3, 9, 10, 11, 12, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Track() error = %v", err)
+	}
+
+	props, ok := got[0]["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties type = %T", got[0]["properties"])
+	}
+	if props["email"] != "mixedcase@example.com" {
+		t.Fatalf("email = %v, want mixedcase@example.com", props["email"])
+	}
+	if props["distinct_id"] != "mixedcase@example.com" {
+		t.Fatalf("distinct_id = %v, want mixedcase@example.com", props["distinct_id"])
+	}
+}
+
 func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("ANALYTICS_ENABLED", "true")
 	t.Setenv("MIXPANEL_TOKEN", "token-123")

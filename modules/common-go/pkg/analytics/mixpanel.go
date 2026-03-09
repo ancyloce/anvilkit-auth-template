@@ -42,7 +42,7 @@ func (c *mixpanelClient) Track(ctx context.Context, ev Event) error {
 		Properties: ev.Properties,
 	})
 	props["token"] = c.token
-	if distinctID := firstNonEmpty(ev.UserID, ev.Email); distinctID != "" {
+	if distinctID := firstNonEmpty(strings.TrimSpace(ev.UserID), normalizeEmail(ev.Email)); distinctID != "" {
 		props["distinct_id"] = distinctID
 	}
 	props["time"] = ts.Unix()

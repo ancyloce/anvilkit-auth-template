@@ -93,11 +93,15 @@ func BuildProperties(ev Event) map[string]any {
 	if strings.TrimSpace(ev.UserID) != "" {
 		props["user_id"] = strings.TrimSpace(ev.UserID)
 	}
-	if strings.TrimSpace(ev.Email) != "" {
-		props["email"] = strings.TrimSpace(strings.ToLower(ev.Email))
+	if normalizedEmail := normalizeEmail(ev.Email); normalizedEmail != "" {
+		props["email"] = normalizedEmail
 	}
 	props["timestamp"] = FormatTimestamp(ts)
 	return props
+}
+
+func normalizeEmail(email string) string {
+	return strings.TrimSpace(strings.ToLower(email))
 }
 
 type NoopClient struct{}
