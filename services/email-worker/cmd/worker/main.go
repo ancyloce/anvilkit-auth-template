@@ -19,6 +19,7 @@ import (
 	"anvilkit-auth-template/services/email-worker/internal/sender"
 	"anvilkit-auth-template/services/email-worker/internal/store"
 	"anvilkit-auth-template/services/email-worker/internal/webhook"
+
 	"golang.org/x/sync/errgroup"
 )
 

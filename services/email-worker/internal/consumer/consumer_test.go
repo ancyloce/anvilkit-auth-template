@@ -13,6 +13,7 @@ import (
 	commonqueue "anvilkit-auth-template/modules/common-go/pkg/queue"
 	"anvilkit-auth-template/services/email-worker/internal/sender"
 	workerstore "anvilkit-auth-template/services/email-worker/internal/store"
+
 	redismock "github.com/go-redis/redismock/v9"
 )
 
