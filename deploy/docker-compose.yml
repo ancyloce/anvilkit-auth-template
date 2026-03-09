@@ -25,6 +25,13 @@ services:
       timeout: 3s
       retries: 30
 
+  mailpit:
+    image: axllent/mailpit:v1.26
+    container_name: anvilkit-mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
   migrate:
     image: postgres:16
     container_name: anvilkit-postgres-migrate
@@ -108,5 +115,57 @@ services:
     environment:
       EMAIL_WEBHOOK_ADDR: :8082
       EMAIL_WEBHOOK_SECRET: dev-email-webhook-secret
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
     ports:
       - "8082:8082"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: anvilkit-prometheus
+    depends_on:
+      - email-worker
+      - alertmanager
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts:/etc/prometheus/alerts:ro
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: anvilkit-alertmanager
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - sed -e "s|__ALERT_EMAIL_TO__|$${ALERT_EMAIL_TO}|g" -e "s|__ALERT_EMAIL_FROM__|$${ALERT_EMAIL_FROM}|g" -e "s|__ALERT_SMTP_SMARTHOST__|$${ALERT_SMTP_SMARTHOST}|g" -e "s|__ALERT_SMTP_AUTH_USERNAME__|$${ALERT_SMTP_AUTH_USERNAME}|g" -e "s|__ALERT_SMTP_AUTH_PASSWORD__|$${ALERT_SMTP_AUTH_PASSWORD}|g" -e "s|__ALERT_SMTP_REQUIRE_TLS__|$${ALERT_SMTP_REQUIRE_TLS}|g" /etc/alertmanager/alertmanager.yml.tmpl > /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
+    environment:
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-alerts@example.com}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-alerts@anvilkit.local}
+      ALERT_SMTP_SMARTHOST: ${ALERT_SMTP_SMARTHOST:-mailpit:1025}
+      ALERT_SMTP_AUTH_USERNAME: ${ALERT_SMTP_AUTH_USERNAME:-}
+      ALERT_SMTP_AUTH_PASSWORD: ${ALERT_SMTP_AUTH_PASSWORD:-}
+      ALERT_SMTP_REQUIRE_TLS: ${ALERT_SMTP_REQUIRE_TLS:-false}
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml.tmpl:/etc/alertmanager/alertmanager.yml.tmpl:ro
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    container_name: anvilkit-grafana
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro

@@ -29,6 +29,7 @@ type Server struct {
 	Store     Store
 	Secret    string
 	Analytics analytics.Client
+	Metrics   http.Handler
 }
 
 type callbackPayload struct {
@@ -52,6 +53,9 @@ func NewHandler(s Server) (http.Handler, error) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	if s.Metrics != nil {
+		mux.Handle("/metrics", s.Metrics)
+	}
 	mux.HandleFunc("/webhooks/email-status", s.handleEmailStatus)
 	return mux, nil
 }

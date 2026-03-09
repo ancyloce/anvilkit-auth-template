@@ -1,0 +1,29 @@
+groups:
+  - name: email-worker
+    rules:
+      - alert: EmailWorkerHighSendFailureRate
+        expr: |
+          (
+            sum(rate(email_worker_send_attempts_total{result="failure"}[10m]))
+            /
+            clamp_min(sum(rate(email_worker_send_attempts_total[10m])), 0.001)
+          ) > 0.05
+          and
+          sum(rate(email_worker_send_attempts_total[10m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: email-worker
+        annotations:
+          summary: Email send failure rate above 5%
+          description: Email send failure rate has exceeded 5% over the last 10 minutes.
+
+      - alert: EmailWorkerQueueBacklogHigh
+        expr: max(email_worker_queue_backlog{queue="email:send"}) > 1000
+        for: 1m
+        labels:
+          severity: critical
+          service: email-worker
+        annotations:
+          summary: Email queue backlog above 1000
+          description: The email queue backlog has exceeded 1000 queued jobs.

@@ -248,6 +248,26 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Generate email-worker metadata
+        id: meta_email_worker
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.prep.outputs.owner_lc }}/${{ env.APP_NAME }}-email-worker
+          tags: |
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: Build and push email-worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/email-worker/Dockerfile
+          push: true
+          tags: ${{ steps.meta_email_worker.outputs.tags }}
+          labels: ${{ steps.meta_email_worker.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
     runs-on: ubuntu-latest
     needs: [test, build]
@@ -261,6 +281,8 @@ jobs:
         env:
           DB_DSN: ${{ secrets.DB_DSN }}
           REDIS_ADDR: ${{ secrets.REDIS_ADDR }}
+          EMAIL_WEBHOOK_SECRET: ${{ secrets.EMAIL_WEBHOOK_SECRET }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
           JWT_ISSUER: ${{ secrets.JWT_ISSUER }}
           JWT_AUDIENCE: ${{ secrets.JWT_AUDIENCE }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
@@ -273,7 +295,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=()
-          for name in DB_DSN REDIS_ADDR JWT_ISSUER JWT_AUDIENCE JWT_SECRET CORS_ALLOW_ORIGINS DEPLOY_SSH_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_PATH; do
+          for name in DB_DSN REDIS_ADDR EMAIL_WEBHOOK_SECRET SMTP_HOST JWT_ISSUER JWT_AUDIENCE JWT_SECRET CORS_ALLOW_ORIGINS DEPLOY_SSH_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_PATH; do
             if [[ -z "${!name:-}" ]]; then
               missing+=("$name")
             fi
@@ -282,7 +304,7 @@ jobs:
           if ((${#missing[@]} > 0)); then
             echo "::error::Missing required secrets for deploy environment: ${missing[*]}"
             echo "Please configure these secrets in GitHub Environment '${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'production' }}'."
-            echo "Required app secrets: DB_DSN, REDIS_ADDR, JWT_ISSUER, JWT_AUDIENCE, JWT_SECRET, CORS_ALLOW_ORIGINS"
+            echo "Required app secrets: DB_DSN, REDIS_ADDR, EMAIL_WEBHOOK_SECRET, SMTP_HOST, JWT_ISSUER, JWT_AUDIENCE, JWT_SECRET, CORS_ALLOW_ORIGINS"
             echo "Required deploy secrets: DEPLOY_SSH_KEY, DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH (DEPLOY_PORT optional; defaults to 22)"
             exit 1
           fi
@@ -297,6 +319,17 @@ jobs:
         env:
           DB_DSN: ${{ secrets.DB_DSN }}
           REDIS_ADDR: ${{ secrets.REDIS_ADDR }}
+          EMAIL_QUEUE_NAME: ${{ secrets.EMAIL_QUEUE_NAME }}
+          EMAIL_QUEUE_POP_TIMEOUT_SEC: ${{ secrets.EMAIL_QUEUE_POP_TIMEOUT_SEC }}
+          EMAIL_QUEUE_BACKLOG_POLL_SEC: ${{ secrets.EMAIL_QUEUE_BACKLOG_POLL_SEC }}
+          EMAIL_WEBHOOK_ADDR: ${{ secrets.EMAIL_WEBHOOK_ADDR }}
+          EMAIL_WEBHOOK_SECRET: ${{ secrets.EMAIL_WEBHOOK_SECRET }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
+          SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
           JWT_ISSUER: ${{ secrets.JWT_ISSUER }}
           JWT_AUDIENCE: ${{ secrets.JWT_AUDIENCE }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
@@ -304,9 +337,19 @@ jobs:
           ACCESS_TTL_MIN: ${{ secrets.ACCESS_TTL_MIN }}
           REFRESH_TTL_HOURS: ${{ secrets.REFRESH_TTL_HOURS }}
           CORS_ALLOW_CREDENTIALS: ${{ secrets.CORS_ALLOW_CREDENTIALS }}
+          GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          ALERT_SMTP_SMARTHOST: ${{ secrets.ALERT_SMTP_SMARTHOST }}
+          ALERT_SMTP_AUTH_USERNAME: ${{ secrets.ALERT_SMTP_AUTH_USERNAME }}
+          ALERT_SMTP_AUTH_PASSWORD: ${{ secrets.ALERT_SMTP_AUTH_PASSWORD }}
+          ALERT_SMTP_REQUIRE_TLS: ${{ secrets.ALERT_SMTP_REQUIRE_TLS }}
           USE_INTERNAL_DEPS: ${{ vars.USE_INTERNAL_DEPS }}
         run: |
           set -euo pipefail
+          : "${EMAIL_WEBHOOK_SECRET:?missing required secret EMAIL_WEBHOOK_SECRET}"
+          : "${SMTP_HOST:?missing required secret SMTP_HOST}"
           : "${JWT_ISSUER:?missing required secret JWT_ISSUER}"
           : "${JWT_AUDIENCE:?missing required secret JWT_AUDIENCE}"
           : "${JWT_SECRET:?missing required secret JWT_SECRET}"
@@ -330,10 +373,34 @@ jobs:
           access_ttl="${ACCESS_TTL_MIN:-15}"
           refresh_ttl="${REFRESH_TTL_HOURS:-168}"
           cors_credentials="${CORS_ALLOW_CREDENTIALS:-false}"
+          email_queue_name="${EMAIL_QUEUE_NAME:-email:send}"
+          email_queue_pop_timeout="${EMAIL_QUEUE_POP_TIMEOUT_SEC:-5}"
+          email_queue_backlog_poll="${EMAIL_QUEUE_BACKLOG_POLL_SEC:-15}"
+          email_webhook_addr="${EMAIL_WEBHOOK_ADDR:-:8082}"
+          smtp_port="${SMTP_PORT:-25}"
+          smtp_from_email="${SMTP_FROM_EMAIL:-noreply@example.com}"
+          smtp_from_name="${SMTP_FROM_NAME:-Anvilkit Auth}"
+          grafana_admin_user="${GRAFANA_ADMIN_USER:-admin}"
+          grafana_admin_password="${GRAFANA_ADMIN_PASSWORD:-admin}"
+          alert_email_to="${ALERT_EMAIL_TO:-alerts@example.com}"
+          alert_email_from="${ALERT_EMAIL_FROM:-alerts@example.com}"
+          alert_smtp_smarthost="${ALERT_SMTP_SMARTHOST:-${SMTP_HOST}:${smtp_port}}"
+          alert_smtp_require_tls="${ALERT_SMTP_REQUIRE_TLS:-false}"
 
           cat > .deploy.env <<EOF_ENV
           DB_DSN=${db_dsn}
           REDIS_ADDR=${redis_addr}
+          EMAIL_QUEUE_NAME=${email_queue_name}
+          EMAIL_QUEUE_POP_TIMEOUT_SEC=${email_queue_pop_timeout}
+          EMAIL_QUEUE_BACKLOG_POLL_SEC=${email_queue_backlog_poll}
+          EMAIL_WEBHOOK_ADDR=${email_webhook_addr}
+          EMAIL_WEBHOOK_SECRET=${EMAIL_WEBHOOK_SECRET}
+          SMTP_HOST=${SMTP_HOST}
+          SMTP_PORT=${smtp_port}
+          SMTP_USERNAME=${SMTP_USERNAME}
+          SMTP_PASSWORD=${SMTP_PASSWORD}
+          SMTP_FROM_EMAIL=${smtp_from_email}
+          SMTP_FROM_NAME=${smtp_from_name}
           JWT_ISSUER=${JWT_ISSUER}
           JWT_AUDIENCE=${JWT_AUDIENCE}
           JWT_SECRET=${JWT_SECRET}
@@ -341,6 +408,14 @@ jobs:
           ACCESS_TTL_MIN=${access_ttl}
           REFRESH_TTL_HOURS=${refresh_ttl}
           CORS_ALLOW_CREDENTIALS=${cors_credentials}
+          GRAFANA_ADMIN_USER=${grafana_admin_user}
+          GRAFANA_ADMIN_PASSWORD=${grafana_admin_password}
+          ALERT_EMAIL_TO=${alert_email_to}
+          ALERT_EMAIL_FROM=${alert_email_from}
+          ALERT_SMTP_SMARTHOST=${alert_smtp_smarthost}
+          ALERT_SMTP_AUTH_USERNAME=${ALERT_SMTP_AUTH_USERNAME}
+          ALERT_SMTP_AUTH_PASSWORD=${ALERT_SMTP_AUTH_PASSWORD}
+          ALERT_SMTP_REQUIRE_TLS=${alert_smtp_require_tls}
           EOF_ENV
           chmod 600 .deploy.env
 
@@ -401,6 +476,9 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env.example"
           scp -P "$port" -o StrictHostKeyChecking=accept-new scripts/remote_deploy.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/scripts/remote_deploy.sh"
+          tar -C deploy -cf - monitoring \
+            | ssh -p "$port" -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" \
+              "rm -rf '$DEPLOY_PATH/deploy/monitoring' && tar -C '$DEPLOY_PATH/deploy' -xf -"
 
           # Stream all migrations as tar archives and extract by service to avoid filename collisions.
           local_count=$(find services/auth-api/migrations services/admin-api/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)

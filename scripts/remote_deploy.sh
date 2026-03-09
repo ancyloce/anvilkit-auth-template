@@ -168,7 +168,7 @@ echo "Logging in to ghcr.io as ${GHCR_USERNAME}"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
 trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
-"${compose_cmd[@]}" pull auth-api admin-api
+"${compose_cmd[@]}" pull auth-api admin-api email-worker
 
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
   echo "Starting internal dependencies (pg, redis)..."
@@ -219,9 +219,9 @@ if ! run_migrate; then
 fi
 
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
-  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api
+  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api email-worker prometheus grafana alertmanager
 else
-  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api
+  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api email-worker prometheus grafana alertmanager
 fi
 
 echo "Container JWT env diagnostics (redacted):"
@@ -230,6 +230,7 @@ echo "Container JWT env diagnostics (redacted):"
 healthcheck() {
   curl -fsS --max-time 5 http://127.0.0.1:8080/healthz >/dev/null
   curl -fsS --max-time 5 http://127.0.0.1:8081/healthz >/dev/null
+  curl -fsS --max-time 5 http://127.0.0.1:8082/healthz >/dev/null
 }
 
 if healthcheck; then
@@ -258,11 +259,11 @@ compose_cmd=(
   -f "$COMPOSE_FILE"
   --env-file "$ENV_FILE"
 )
-"${compose_cmd[@]}" pull auth-api admin-api
+"${compose_cmd[@]}" pull auth-api admin-api email-worker
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
-  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api
+  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api email-worker prometheus grafana alertmanager
 else
-  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api
+  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api email-worker prometheus grafana alertmanager
 fi
 
 if healthcheck; then

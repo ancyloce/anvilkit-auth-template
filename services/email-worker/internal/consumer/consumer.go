@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"anvilkit-auth-template/modules/common-go/pkg/analytics"
+	"anvilkit-auth-template/services/email-worker/internal/monitoring"
 	"anvilkit-auth-template/services/email-worker/internal/sender"
 	workerstore "anvilkit-auth-template/services/email-worker/internal/store"
 	emailtemplates "anvilkit-auth-template/services/email-worker/templates"
@@ -87,6 +88,7 @@ type Consumer struct {
 	Store     Store
 	Analytics analytics.Client
 	Scheduler Scheduler
+	Metrics   *monitoring.Metrics
 }
 
 func (c *Consumer) Run(ctx context.Context) error {
@@ -174,9 +176,16 @@ func (c *Consumer) handleJob(ctx context.Context, job EmailJob) error {
 		textBody = renderedText
 	}
 
+	startedAt := time.Now()
 	externalID, err := c.Sender.Send(ctx, sender.Request{To: job.To, Subject: job.Subject, HTMLBody: htmlBody, TextBody: textBody})
 	if err != nil {
+		if c.Metrics != nil {
+			c.Metrics.ObserveSendFailure(time.Since(startedAt))
+		}
 		return c.handleDeliveryError(ctx, job, err)
+	}
+	if c.Metrics != nil {
+		c.Metrics.ObserveSendSuccess(time.Since(startedAt))
 	}
 
 	if err := c.Store.MarkSent(ctx, job.RecordID, externalID); err != nil {
