@@ -342,7 +342,7 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 		}
 		return err
 	}
-	if activatedNow {
+	if activatedNow && h.Analytics != nil {
 		if user, err := h.Store.LookupAnalyticsUserByEmail(c, emailAddr); err != nil {
 			log.Printf("auth-api analytics: lookup otp activation user email=%q: %v", emailAddr, err)
 		} else {
