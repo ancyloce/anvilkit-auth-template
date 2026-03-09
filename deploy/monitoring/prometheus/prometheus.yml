@@ -15,4 +15,4 @@ scrape_configs:
   - job_name: email-worker
     static_configs:
       - targets:
-          - email-worker:8082
+          - email-worker:9090

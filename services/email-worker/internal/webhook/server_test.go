@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -88,31 +87,6 @@ func TestEmailStatusWebhook_ValidSignatureProcessesDeliveredAndOpened(t *testing
 	}
 	if store.calls[1].status != "opened" {
 		t.Fatalf("second call=%+v", store.calls[1])
-	}
-}
-
-func TestNewHandler_ExposesMetricsEndpointWhenConfigured(t *testing.T) {
-	store := &fakeStore{inserted: true}
-	h, err := NewHandler(Server{
-		Store:  store,
-		Secret: "secret",
-		Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = io.WriteString(w, "email_worker_send_attempts_total 1\n")
-		}),
-	})
-	if err != nil {
-		t.Fatalf("new handler: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
-	}
-	if rr.Body.String() != "email_worker_send_attempts_total 1\n" {
-		t.Fatalf("body=%q", rr.Body.String())
 	}
 }
 

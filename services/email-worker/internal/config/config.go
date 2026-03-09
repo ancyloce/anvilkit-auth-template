@@ -19,6 +19,7 @@ const (
 	defaultQueueTimeoutSec = 5
 	defaultQueuePollSec    = 15
 	defaultWebhookAddr     = ":8082"
+	defaultMetricsAddr     = ":9090"
 	defaultSMTPHost        = "localhost"
 	defaultSMTPPort        = 1025
 	defaultSMTPFromEmail   = "noreply@example.com"
@@ -32,6 +33,7 @@ type Config struct {
 	QueuePopTimeout   time.Duration
 	QueuePollInterval time.Duration
 	WebhookAddr       string
+	MetricsAddr       string
 	WebhookSecret     string
 	SMTPHost          string
 	SMTPPort          int
@@ -59,6 +61,7 @@ func LoadFromEnv() (Config, error) {
 		QueuePopTimeout:   time.Duration(queueTimeoutSec) * time.Second,
 		QueuePollInterval: time.Duration(queuePollSec) * time.Second,
 		WebhookAddr:       getStringFromEnv("EMAIL_WEBHOOK_ADDR", defaultWebhookAddr),
+		MetricsAddr:       getStringFromEnv("EMAIL_METRICS_ADDR", defaultMetricsAddr),
 		WebhookSecret:     strings.TrimSpace(os.Getenv("EMAIL_WEBHOOK_SECRET")),
 		SMTPHost:          getStringFromEnv("SMTP_HOST", defaultSMTPHost),
 		SMTPPort:          getIntFromEnv("SMTP_PORT", defaultSMTPPort),
@@ -83,6 +86,9 @@ func LoadFromEnv() (Config, error) {
 	}
 	if strings.TrimSpace(cfg.WebhookAddr) == "" {
 		return Config{}, fmt.Errorf("EMAIL_WEBHOOK_ADDR cannot be empty")
+	}
+	if strings.TrimSpace(cfg.MetricsAddr) == "" {
+		return Config{}, fmt.Errorf("EMAIL_METRICS_ADDR cannot be empty")
 	}
 	if cfg.WebhookSecret == "" {
 		return Config{}, fmt.Errorf("EMAIL_WEBHOOK_SECRET cannot be empty")

@@ -4,7 +4,7 @@ This repository uses Prometheus, Grafana, and Alertmanager to monitor the `email
 
 ## Metrics
 
-`email-worker` exports the following Prometheus metrics on `GET /metrics`:
+`email-worker` exports the following Prometheus metrics on a dedicated internal `GET /metrics` listener:
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
@@ -17,17 +17,15 @@ The metrics design keeps labels low-cardinality and does not attach per-recipien
 
 ## `/metrics` exposure
 
-`email-worker` already serves HTTP traffic on `EMAIL_WEBHOOK_ADDR` for webhook callbacks and health checks. Monitoring extends the same listener:
+`email-worker` serves webhook traffic and metrics on separate listeners:
 
 - `GET /healthz`
-- `GET /metrics`
 - `POST /webhooks/email-status`
+- `GET /metrics`
 
-In local Docker Compose, the worker listens on port `8082`, so metrics are reachable at:
+The public webhook listener is configured by `EMAIL_WEBHOOK_ADDR`. The internal metrics listener is configured by `EMAIL_METRICS_ADDR` and is scraped by Prometheus over the Docker network at `email-worker:9090`.
 
-```bash
-curl -fsS http://localhost:8082/metrics
-```
+The metrics listener is intentionally not published on the host in Compose, so `/metrics` is no longer exposed via the public `:8082` listener.
 
 ## Queue backlog collection
 
@@ -43,7 +41,7 @@ This updates `email_worker_queue_backlog`.
 
 Prometheus is configured in [deploy/monitoring/prometheus/prometheus.yml](/root/Rhett/anvilkit-auth-template/deploy/monitoring/prometheus/prometheus.yml) and scrapes:
 
-- `email-worker:8082`
+- `email-worker:9090`
 
 Alert rules live in [deploy/monitoring/prometheus/alerts/email-worker.rules.yml](/root/Rhett/anvilkit-auth-template/deploy/monitoring/prometheus/alerts/email-worker.rules.yml).
 
@@ -121,7 +119,7 @@ Check the main services:
 
 ```bash
 curl -fsS http://localhost:8082/healthz
-curl -fsS http://localhost:8082/metrics | rg 'email_worker_(send_attempts_total|send_latency_seconds|queue_backlog)'
+docker exec anvilkit-prometheus wget -qO- http://email-worker:9090/metrics | rg 'email_worker_(send_attempts_total|send_latency_seconds|queue_backlog)'
 ```
 
 ## Local alert testing

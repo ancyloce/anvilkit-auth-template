@@ -83,7 +83,6 @@ func main() {
 		Store:     dataStore,
 		Secret:    cfg.WebhookSecret,
 		Analytics: analyticsClient,
-		Metrics:   metrics.Handler(),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -91,6 +90,13 @@ func main() {
 	webhookServer := &http.Server{
 		Addr:              cfg.WebhookAddr,
 		Handler:           webhookHandler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+	}
+	metricsServer := &http.Server{
+		Addr:              cfg.MetricsAddr,
+		Handler:           metrics.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -109,6 +115,19 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return webhookServer.Shutdown(shutdownCtx)
+	})
+	g.Go(func() error {
+		log.Printf("email-worker metrics server started: addr=%s", cfg.MetricsAddr)
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	})
+	g.Go(func() error {
+		<-gctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return metricsServer.Shutdown(shutdownCtx)
 	})
 	g.Go(func() error {
 		log.Printf("email-worker consumer started: queue=%s redis=%s", cfg.QueueName, cfg.RedisAddr)

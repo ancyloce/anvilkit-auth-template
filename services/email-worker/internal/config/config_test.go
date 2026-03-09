@@ -63,6 +63,19 @@ func TestLoadFromEnvQueueBacklogPollConfigRejectsNonPositive(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvMetricsAddrConfig(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("EMAIL_METRICS_ADDR", ":9191")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+	if cfg.MetricsAddr != ":9191" {
+		t.Fatalf("MetricsAddr = %q, want :9191", cfg.MetricsAddr)
+	}
+}
+
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("EMAIL_WEBHOOK_SECRET", "secret")
