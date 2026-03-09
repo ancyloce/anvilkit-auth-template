@@ -481,7 +481,7 @@ where email = $1`,
 	return &user, nil
 }
 
-func (s *Store) LookupMagicLinkAnalytics(ctx context.Context, magicToken string) (*MagicLinkAnalytics, error) {
+func (s *Store) LookupMagicLinkAnalytics(ctx context.Context, magicToken string, now time.Time) (*MagicLinkAnalytics, error) {
 	tokenHash := email.HashToken(magicToken)
 	var result MagicLinkAnalytics
 	err := s.DB.QueryRow(ctx, `
@@ -502,9 +502,12 @@ from email_verifications ev
 join users u on u.id = ev.user_id
 where ev.token_type = 'magic_link'
   and ev.token_hash = $1
+  and ev.verified_at is null
+  and ev.expires_at > $2
 order by ev.created_at desc, ev.id desc
 limit 1`,
 		tokenHash,
+		now,
 	).Scan(&result.UserID, &result.Email, &result.SentAt)
 	if err != nil {
 		return nil, err

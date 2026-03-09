@@ -11,6 +11,7 @@ import (
 	commonemail "anvilkit-auth-template/modules/common-go/pkg/email"
 	"anvilkit-auth-template/services/auth-api/internal/testutil"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -596,6 +597,56 @@ values($1,$2,$3,'magic_link',$4,now())`,
 	}
 	if verifiedAt == nil {
 		t.Fatal("magic email_verifications.verified_at should be set")
+	}
+}
+
+func TestLookupMagicLinkAnalyticsRequiresUnverifiedAndUnexpiredToken(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-magic-analytics-user"
+	emailAddr := "store-magic-analytics@example.com"
+	seedStoreUser(t, db, userID, emailAddr)
+
+	now := time.Now().Round(time.Second)
+	validToken := "magic-valid-token"
+	expiredToken := "magic-expired-token"
+	verifiedToken := "magic-verified-token"
+
+	if _, err := db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,verified_at,created_at)
+values
+  ($1,$2,$3,'magic_link',$4,null,now()),
+  ($5,$2,$6,'magic_link',$7,null,now()),
+  ($8,$2,$9,'magic_link',$10,now(),now())`,
+		"magic-analytics-valid",
+		userID,
+		commonemail.HashToken(validToken),
+		now.Add(15*time.Minute),
+		"magic-analytics-expired",
+		commonemail.HashToken(expiredToken),
+		now.Add(-time.Minute),
+		"magic-analytics-verified",
+		commonemail.HashToken(verifiedToken),
+		now.Add(15*time.Minute),
+	); err != nil {
+		t.Fatalf("insert magic verifications: %v", err)
+	}
+
+	details, err := s.LookupMagicLinkAnalytics(context.Background(), validToken, now)
+	if err != nil {
+		t.Fatalf("LookupMagicLinkAnalytics(valid): %v", err)
+	}
+	if details.UserID != userID || details.Email != emailAddr {
+		t.Fatalf("details=%+v want user_id=%q email=%q", details, userID, emailAddr)
+	}
+
+	if _, err := s.LookupMagicLinkAnalytics(context.Background(), expiredToken, now); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("LookupMagicLinkAnalytics(expired) err=%v want=%v", err, pgx.ErrNoRows)
+	}
+	if _, err := s.LookupMagicLinkAnalytics(context.Background(), verifiedToken, now); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("LookupMagicLinkAnalytics(verified) err=%v want=%v", err, pgx.ErrNoRows)
 	}
 }
 

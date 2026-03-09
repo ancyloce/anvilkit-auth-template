@@ -377,7 +377,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 	now := time.Now()
 	var magicLinkDetails *store.MagicLinkAnalytics
 	if h.Analytics != nil {
-		details, err := h.Store.LookupMagicLinkAnalytics(c, token)
+		details, err := h.Store.LookupMagicLinkAnalytics(c, token, now)
 		if err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				log.Printf("auth-api analytics: lookup magic-link details failed: %v", err)
