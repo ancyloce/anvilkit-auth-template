@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"anvilkit-auth-template/modules/common-go/pkg/cfg"
+	cfgpkg "anvilkit-auth-template/modules/common-go/pkg/cfg"
 )
 
 const (
@@ -35,40 +35,40 @@ type Config struct {
 }
 
 func LoadConfigFromEnv() (Config, error) {
-	cfg := Config{
-		Enabled:       cfg.GetBool("ANALYTICS_ENABLED", false),
-		MixpanelToken: strings.TrimSpace(cfg.GetString("MIXPANEL_TOKEN", "")),
-		Endpoint:      strings.TrimSpace(cfg.GetString("MIXPANEL_API_ENDPOINT", defaultEndpoint)),
+	conf := Config{
+		Enabled:       cfgpkg.GetBool("ANALYTICS_ENABLED", false),
+		MixpanelToken: strings.TrimSpace(cfgpkg.GetString("MIXPANEL_TOKEN", "")),
+		Endpoint:      strings.TrimSpace(cfgpkg.GetString("MIXPANEL_API_ENDPOINT", defaultEndpoint)),
 	}
-	if !cfg.Enabled {
-		return cfg, nil
+	if !conf.Enabled {
+		return conf, nil
 	}
-	if cfg.MixpanelToken == "" {
+	if conf.MixpanelToken == "" {
 		return Config{}, fmt.Errorf("MIXPANEL_TOKEN is required when ANALYTICS_ENABLED=true")
 	}
-	if cfg.Endpoint == "" {
-		cfg.Endpoint = defaultEndpoint
+	if conf.Endpoint == "" {
+		conf.Endpoint = defaultEndpoint
 	}
-	return cfg, nil
+	return conf, nil
 }
 
-func NewClient(cfg Config) (Client, error) {
-	if !cfg.Enabled {
+func NewClient(conf Config) (Client, error) {
+	if !conf.Enabled {
 		return NoopClient{}, nil
 	}
-	if strings.TrimSpace(cfg.MixpanelToken) == "" {
+	if strings.TrimSpace(conf.MixpanelToken) == "" {
 		return nil, fmt.Errorf("MIXPANEL_TOKEN is required when analytics is enabled")
 	}
-	endpoint := strings.TrimSpace(cfg.Endpoint)
+	endpoint := strings.TrimSpace(conf.Endpoint)
 	if endpoint == "" {
 		endpoint = defaultEndpoint
 	}
-	httpClient := cfg.HTTPClient
+	httpClient := conf.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 5 * time.Second}
 	}
 	return &mixpanelClient{
-		token:      cfg.MixpanelToken,
+		token:      conf.MixpanelToken,
 		endpoint:   endpoint,
 		httpClient: httpClient,
 	}, nil
