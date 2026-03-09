@@ -409,7 +409,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 		return err
 	}
 	if magicLinkDetails != nil {
-		props := map[string]any{"latency_from_sent": 0}
+		props := map[string]any{"latency_from_sent": int64(0)}
 		if magicLinkDetails.SentAt != nil {
 			props["latency_from_sent"] = maxInt64(0, now.UTC().Sub(magicLinkDetails.SentAt.UTC()).Milliseconds())
 		}
