@@ -52,7 +52,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rdb.Close()
+	defer func() {
+		if err := rdb.Close(); err != nil {
+			log.Printf("email-worker: close redis client: %v", err)
+		}
+	}()
 
 	q, err := queue.New(rdb)
 	if err != nil {

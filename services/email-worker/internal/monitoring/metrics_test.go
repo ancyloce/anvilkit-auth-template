@@ -23,6 +23,13 @@ func (f fakeQueueLengthReader) QueueLengthContext(_ context.Context, _ string) (
 	return f.backlog, nil
 }
 
+func closeBody(t *testing.T, body io.Closer) {
+	t.Helper()
+	if err := body.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
 func TestMetricsHandlerExportsRequiredEmailMetrics(t *testing.T) {
 	metrics, err := NewMetrics()
 	if err != nil {
@@ -40,7 +47,7 @@ func TestMetricsHandlerExportsRequiredEmailMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /metrics: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(t, resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want=200", resp.StatusCode)
@@ -83,7 +90,7 @@ func TestQueueBacklogCollectorPollsAndUpdatesGauge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /metrics: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(t, resp.Body)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -115,7 +122,7 @@ func TestQueueBacklogCollectorRecordsPollFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /metrics: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(t, resp.Body)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
