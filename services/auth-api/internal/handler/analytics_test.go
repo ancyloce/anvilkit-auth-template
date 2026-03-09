@@ -137,6 +137,110 @@ func TestVerifyMagicLinkEmitsClickAndActivationEvents(t *testing.T) {
 	}
 }
 
+func TestVerifyEmailAfterMagicLinkDoesNotEmitSecondActivation(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	tracker := &fakeAnalytics{}
+	r := newAnalyticsRouter(t, db, rdb, tracker)
+
+	registerRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "analytics-dupe-otp@example.com",
+		"password": "Passw0rd!",
+	})
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	parsedLink, err := url.Parse(job.MagicLink)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	stateCookie := findCookieByName(registerRes, magicLinkStateCookieName)
+	if stateCookie == nil {
+		t.Fatalf("missing %s cookie", magicLinkStateCookieName)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify-magic-link?token="+url.QueryEscape(parsedLink.Query().Get("token"))+"&state="+url.QueryEscape(parsedLink.Query().Get("state")), nil)
+	req.AddCookie(stateCookie)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusFound {
+		t.Fatalf("verify magic link status=%d want=%d body=%s", w.Code, http.StatusFound, w.Body.String())
+	}
+
+	verifyRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "analytics-dupe-otp@example.com",
+		"otp":   job.OTP,
+	})
+	if verifyRes.Code != http.StatusOK {
+		t.Fatalf("verify otp status=%d want=%d body=%s", verifyRes.Code, http.StatusOK, verifyRes.Body.String())
+	}
+
+	activationCount := 0
+	for _, event := range tracker.events {
+		if event.Name == "account_activated" {
+			activationCount++
+		}
+	}
+	if activationCount != 1 {
+		t.Fatalf("account_activated count=%d want=1 events=%+v", activationCount, tracker.events)
+	}
+}
+
+func TestVerifyMagicLinkAfterOTPDoesNotEmitSecondActivation(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	tracker := &fakeAnalytics{}
+	r := newAnalyticsRouter(t, db, rdb, tracker)
+
+	registerRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "analytics-dupe-magic@example.com",
+		"password": "Passw0rd!",
+	})
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	verifyRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "analytics-dupe-magic@example.com",
+		"otp":   job.OTP,
+	})
+	if verifyRes.Code != http.StatusOK {
+		t.Fatalf("verify otp status=%d want=%d body=%s", verifyRes.Code, http.StatusOK, verifyRes.Body.String())
+	}
+
+	parsedLink, err := url.Parse(job.MagicLink)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	stateCookie := findCookieByName(registerRes, magicLinkStateCookieName)
+	if stateCookie == nil {
+		t.Fatalf("missing %s cookie", magicLinkStateCookieName)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify-magic-link?token="+url.QueryEscape(parsedLink.Query().Get("token"))+"&state="+url.QueryEscape(parsedLink.Query().Get("state")), nil)
+	req.AddCookie(stateCookie)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusFound {
+		t.Fatalf("verify magic link status=%d want=%d body=%s", w.Code, http.StatusFound, w.Body.String())
+	}
+
+	activationCount := 0
+	for _, event := range tracker.events {
+		if event.Name == "account_activated" {
+			activationCount++
+		}
+	}
+	if activationCount != 1 {
+		t.Fatalf("account_activated count=%d want=1 events=%+v", activationCount, tracker.events)
+	}
+}
+
 func newAnalyticsRouter(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client, tracker *fakeAnalytics) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

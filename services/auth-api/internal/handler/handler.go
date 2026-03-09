@@ -329,7 +329,8 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 		return apperr.BadRequest(errors.New("invalid_otp")).WithData(map[string]any{"reason": "invalid_otp"})
 	}
 
-	if err := h.Store.VerifyEmailOTP(c, emailAddr, otp, time.Now()); err != nil {
+	activatedNow, err := h.Store.VerifyEmailOTP(c, emailAddr, otp, time.Now())
+	if err != nil {
 		if errors.Is(err, store.ErrInvalidVerificationOTP) {
 			return apperr.BadRequest(err).WithData(map[string]any{"reason": "invalid_otp"})
 		}
@@ -341,18 +342,20 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 		}
 		return err
 	}
-	if user, err := h.Store.LookupAnalyticsUserByEmail(c, emailAddr); err != nil {
-		log.Printf("auth-api analytics: lookup otp activation user email=%q: %v", emailAddr, err)
-	} else {
-		h.track(c, analytics.Event{
-			Name:      "account_activated",
-			UserID:    user.UserID,
-			Email:     user.Email,
-			Timestamp: time.Now().UTC(),
-			Properties: map[string]any{
-				"method": "otp",
-			},
-		})
+	if activatedNow {
+		if user, err := h.Store.LookupAnalyticsUserByEmail(c, emailAddr); err != nil {
+			log.Printf("auth-api analytics: lookup otp activation user email=%q: %v", emailAddr, err)
+		} else {
+			h.track(c, analytics.Event{
+				Name:      "account_activated",
+				UserID:    user.UserID,
+				Email:     user.Email,
+				Timestamp: time.Now().UTC(),
+				Properties: map[string]any{
+					"method": "otp",
+				},
+			})
+		}
 	}
 
 	resp.OK(c, dto.VerifyEmailResponse{Message: "Email verified successfully"})
@@ -423,7 +426,8 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 		return nil
 	}
 
-	if err := h.Store.VerifyMagicLinkToken(c, token, now); err != nil {
+	activatedNow, err := h.Store.VerifyMagicLinkToken(c, token, now)
+	if err != nil {
 		if errors.Is(err, store.ErrInvalidMagicLink) {
 			renderMagicLinkPage(
 				c,
@@ -444,18 +448,20 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 		}
 		return err
 	}
-	if details, err := h.Store.LookupMagicLinkAnalytics(c, token); err != nil {
-		log.Printf("auth-api analytics: lookup magic-link activation details failed: %v", err)
-	} else {
-		h.track(c, analytics.Event{
-			Name:      "account_activated",
-			UserID:    details.UserID,
-			Email:     details.Email,
-			Timestamp: time.Now().UTC(),
-			Properties: map[string]any{
-				"method": "magic_link",
-			},
-		})
+	if activatedNow {
+		if details, err := h.Store.LookupMagicLinkAnalytics(c, token); err != nil {
+			log.Printf("auth-api analytics: lookup magic-link activation details failed: %v", err)
+		} else {
+			h.track(c, analytics.Event{
+				Name:      "account_activated",
+				UserID:    details.UserID,
+				Email:     details.Email,
+				Timestamp: time.Now().UTC(),
+				Properties: map[string]any{
+					"method": "magic_link",
+				},
+			})
+		}
 	}
 
 	clearMagicLinkStateCookie(c)

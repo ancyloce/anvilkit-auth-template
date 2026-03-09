@@ -141,6 +141,72 @@ where token_type='otp' and token_hash=$1`, otpHash).Scan(&otpCount); err != nil 
 	}
 }
 
+func TestVerifyMagicLinkTokenReturnsFalseWhenAlreadyActivated(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-magic-already-active-user"
+	emailAddr := "store-magic-already-active@example.com"
+	seedStoreUser(t, db, userID, emailAddr)
+
+	magicToken := "already-active-magic-token"
+	if _, err := db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at)
+values($1,$2,$3,'magic_link',$4,now())`,
+		"verify-magic-already-active-row",
+		userID,
+		commonemail.HashToken(magicToken),
+		time.Now().Add(10*time.Minute),
+	); err != nil {
+		t.Fatalf("insert magic verification: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `update users set status=1,email_verified_at=now(),updated_at=now() where id=$1`, userID); err != nil {
+		t.Fatalf("activate user: %v", err)
+	}
+
+	activatedNow, err := s.VerifyMagicLinkToken(context.Background(), magicToken, time.Now())
+	if err != nil {
+		t.Fatalf("VerifyMagicLinkToken: %v", err)
+	}
+	if activatedNow {
+		t.Fatal("activatedNow=true want false")
+	}
+}
+
+func TestVerifyEmailOTPReturnsFalseWhenAlreadyActivated(t *testing.T) {
+	db := testutil.MustTestDB(t)
+	testutil.TruncateAuthTables(t, db)
+
+	s := &Store{DB: db}
+	userID := "store-otp-already-active-user"
+	emailAddr := "store-otp-already-active@example.com"
+	seedStoreUser(t, db, userID, emailAddr)
+
+	otp := "654321"
+	if _, err := db.Exec(context.Background(), `
+insert into email_verifications(id,user_id,token_hash,token_type,expires_at,created_at)
+values($1,$2,$3,'otp',$4,now())`,
+		"verify-otp-already-active-row",
+		userID,
+		commonemail.HashToken(otp),
+		time.Now().Add(10*time.Minute),
+	); err != nil {
+		t.Fatalf("insert email verification: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `update users set status=1,email_verified_at=now(),updated_at=now() where id=$1`, userID); err != nil {
+		t.Fatalf("activate user: %v", err)
+	}
+
+	activatedNow, err := s.VerifyEmailOTP(context.Background(), emailAddr, otp, time.Now())
+	if err != nil {
+		t.Fatalf("VerifyEmailOTP: %v", err)
+	}
+	if activatedNow {
+		t.Fatal("activatedNow=true want false")
+	}
+}
+
 func TestStoreRollbackResendVerificationRestoresPreviousVerificationRows(t *testing.T) {
 	db := testutil.MustTestDB(t)
 	testutil.TruncateAuthTables(t, db)
@@ -259,8 +325,12 @@ values($1,$2,$3,'otp',$4,now())`,
 
 	ctx, cancel := testCtx(t)
 	defer cancel()
-	if err := s.VerifyEmailOTP(ctx, emailAddr, otp, time.Now()); err != nil {
+	activatedNow, err := s.VerifyEmailOTP(ctx, emailAddr, otp, time.Now())
+	if err != nil {
 		t.Fatalf("VerifyEmailOTP: %v", err)
+	}
+	if !activatedNow {
+		t.Fatal("activatedNow=false want true")
 	}
 
 	var status int16
@@ -310,7 +380,7 @@ values($1,$2,$3,'otp',$4,now())`,
 
 	ctx, cancel := testCtx(t)
 	defer cancel()
-	err = s.VerifyEmailOTP(ctx, emailAddr, "111111", time.Now())
+	_, err = s.VerifyEmailOTP(ctx, emailAddr, "111111", time.Now())
 	if !errors.Is(err, ErrInvalidVerificationOTP) {
 		t.Fatalf("VerifyEmailOTP err=%v want=%v", err, ErrInvalidVerificationOTP)
 	}
@@ -355,7 +425,7 @@ values($1,$2,$3,'otp',$4,now())`,
 
 	ctx, cancel := testCtx(t)
 	defer cancel()
-	err = s.VerifyEmailOTP(ctx, emailAddr, otp, time.Now())
+	_, err = s.VerifyEmailOTP(ctx, emailAddr, otp, time.Now())
 	if !errors.Is(err, ErrVerificationExpired) {
 		t.Fatalf("VerifyEmailOTP err=%v want=%v", err, ErrVerificationExpired)
 	}
@@ -397,7 +467,7 @@ values($1,$2,$3,'otp',$4,$5,now())`,
 
 	ctx, cancel := testCtx(t)
 	defer cancel()
-	err = s.VerifyEmailOTP(ctx, emailAddr, "111111", time.Now())
+	_, err = s.VerifyEmailOTP(ctx, emailAddr, "111111", time.Now())
 	if !errors.Is(err, ErrTooManyOTPAttempts) {
 		t.Fatalf("VerifyEmailOTP err=%v want=%v", err, ErrTooManyOTPAttempts)
 	}
@@ -412,7 +482,7 @@ values($1,$2,$3,'otp',$4,$5,now())`,
 
 	ctxLocked, cancelLocked := testCtx(t)
 	defer cancelLocked()
-	err = s.VerifyEmailOTP(ctxLocked, emailAddr, otp, time.Now())
+	_, err = s.VerifyEmailOTP(ctxLocked, emailAddr, otp, time.Now())
 	if !errors.Is(err, ErrTooManyOTPAttempts) {
 		t.Fatalf("VerifyEmailOTP locked err=%v want=%v", err, ErrTooManyOTPAttempts)
 	}
@@ -455,7 +525,7 @@ values($1,$2,$3,'otp',$4,now())`,
 
 	ctx, cancel := testCtx(t)
 	defer cancel()
-	err = s.VerifyEmailOTP(ctx, emailAddr, "111111", time.Now())
+	_, err = s.VerifyEmailOTP(ctx, emailAddr, "111111", time.Now())
 	if !errors.Is(err, ErrInvalidVerificationOTP) {
 		t.Fatalf("VerifyEmailOTP err=%v want=%v", err, ErrInvalidVerificationOTP)
 	}
@@ -500,8 +570,12 @@ values($1,$2,$3,'magic_link',$4,now())`,
 
 	ctx, cancel := testCtx(t)
 	defer cancel()
-	if err := s.VerifyMagicLinkToken(ctx, magicToken, time.Now()); err != nil {
+	activatedNow, err := s.VerifyMagicLinkToken(ctx, magicToken, time.Now())
+	if err != nil {
 		t.Fatalf("VerifyMagicLinkToken: %v", err)
+	}
+	if !activatedNow {
+		t.Fatal("activatedNow=false want true")
 	}
 
 	var status int16
