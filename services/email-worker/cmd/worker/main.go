@@ -33,6 +33,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if !cfg.Analytics.Enabled {
+		analyticsClient = nil
+	}
 
 	db, err := pgsql.New(ctx, cfg.DBDSN)
 	if err != nil {

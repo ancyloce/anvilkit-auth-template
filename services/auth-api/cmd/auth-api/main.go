@@ -35,6 +35,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if !authCfg.Analytics.Enabled {
+		analyticsClient = nil
+	}
 
 	h := &handler.Handler{
 		Store:           &store.Store{DB: db},
