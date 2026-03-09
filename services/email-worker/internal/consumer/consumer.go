@@ -289,6 +289,10 @@ func (c *Consumer) trackRecordEvent(ctx context.Context, recordID, eventName str
 		log.Printf("email-worker analytics: skip event=%q record_id=%q missing user_id", eventName, recordID)
 		return
 	}
+	if strings.TrimSpace(record.Email) == "" {
+		log.Printf("email-worker analytics: skip event=%q record_id=%q missing email", eventName, recordID)
+		return
+	}
 	if err := c.Analytics.Track(ctx, analytics.Event{
 		Name:       eventName,
 		UserID:     record.UserID,

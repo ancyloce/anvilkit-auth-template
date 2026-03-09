@@ -442,6 +442,48 @@ func TestRun_SkipsAnalyticsWhenUserIDMissing(t *testing.T) {
 	}
 }
 
+func TestRun_SkipsAnalyticsWhenEmailMissing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &fakeQueue{
+		resps: []queueResp{{
+			ok: true,
+			job: EmailJob{
+				RecordID: "rec-no-email",
+				To:       "user@example.com",
+				Subject:  "subject",
+				HTMLBody: "<p>hello</p>",
+				TextBody: "hello",
+			},
+		}},
+	}
+	s := &fakeSender{resps: []senderResp{{externalID: "esp-sent"}}}
+	tracker := &fakeAnalytics{}
+	st := &fakeStore{
+		analyticsByID: map[string]*workerstore.AnalyticsRecord{
+			"rec-no-email": {UserID: "user-1", Email: ""},
+		},
+		onMarkSent: cancel,
+	}
+
+	c := &Consumer{
+		Queue:     q,
+		QueueName: "email:send",
+		Timeout:   time.Second,
+		Sender:    s,
+		Store:     st,
+		Analytics: tracker,
+	}
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(tracker.events) != 0 {
+		t.Fatalf("event count=%d want=0", len(tracker.events))
+	}
+}
+
 func TestRun_InvalidRecipientMarksFailed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
