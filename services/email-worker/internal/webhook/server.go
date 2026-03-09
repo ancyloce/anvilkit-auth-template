@@ -79,7 +79,8 @@ func (s Server) handleEmailStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	payload.Event = strings.TrimSpace(strings.ToLower(payload.Event))
 	payload.ExternalID = strings.TrimSpace(payload.ExternalID)
-	if payload.ExternalID == "" || !allowedEvent(payload.Event) {
+	payload.EventID = strings.TrimSpace(payload.EventID)
+	if payload.ExternalID == "" || payload.EventID == "" || !allowedEvent(payload.Event) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
