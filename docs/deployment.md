@@ -18,4 +18,4 @@ The smoke script bootstraps a tenant/user and calls admin endpoint with issued t
 
 ## Monitoring
 
-Monitoring and alerting setup for the email pipeline is documented in [docs/monitoring.md](/root/Rhett/anvilkit-auth-template/docs/monitoring.md).
+Monitoring and alerting setup for the email pipeline is documented in [docs/monitoring.md](monitoring.md).

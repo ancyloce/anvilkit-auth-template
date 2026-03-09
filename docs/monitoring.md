@@ -39,19 +39,19 @@ This updates `email_worker_queue_backlog`.
 
 ## Prometheus
 
-Prometheus is configured in [deploy/monitoring/prometheus/prometheus.yml](/root/Rhett/anvilkit-auth-template/deploy/monitoring/prometheus/prometheus.yml) and scrapes:
+Prometheus is configured in [deploy/monitoring/prometheus/prometheus.yml](../deploy/monitoring/prometheus/prometheus.yml) and scrapes:
 
 - `email-worker:9090`
 
-Alert rules live in [deploy/monitoring/prometheus/alerts/email-worker.rules.yml](/root/Rhett/anvilkit-auth-template/deploy/monitoring/prometheus/alerts/email-worker.rules.yml).
+Alert rules live in [deploy/monitoring/prometheus/alerts/email-worker.rules.yml](../deploy/monitoring/prometheus/alerts/email-worker.rules.yml).
 
 ## Grafana
 
 Grafana provisioning is version-controlled:
 
-- datasource: [deploy/monitoring/grafana/provisioning/datasources/prometheus.yml](/root/Rhett/anvilkit-auth-template/deploy/monitoring/grafana/provisioning/datasources/prometheus.yml)
-- dashboard provider: [deploy/monitoring/grafana/provisioning/dashboards/dashboards.yml](/root/Rhett/anvilkit-auth-template/deploy/monitoring/grafana/provisioning/dashboards/dashboards.yml)
-- dashboard JSON: [deploy/monitoring/grafana/dashboards/email-worker-overview.json](/root/Rhett/anvilkit-auth-template/deploy/monitoring/grafana/dashboards/email-worker-overview.json)
+- datasource: [deploy/monitoring/grafana/provisioning/datasources/prometheus.yml](../deploy/monitoring/grafana/provisioning/datasources/prometheus.yml)
+- dashboard provider: [deploy/monitoring/grafana/provisioning/dashboards/dashboards.yml](../deploy/monitoring/grafana/provisioning/dashboards/dashboards.yml)
+- dashboard JSON: [deploy/monitoring/grafana/dashboards/email-worker-overview.json](../deploy/monitoring/grafana/dashboards/email-worker-overview.json)
 
 The dashboard includes:
 
@@ -86,7 +86,7 @@ Two alert rules are configured:
 
 ## Alert notifications
 
-Alertmanager is configured by [render-alertmanager-config.sh](/root/Rhett/anvilkit-auth-template/deploy/monitoring/alertmanager/render-alertmanager-config.sh), which generates the YAML at container start from environment variables using shell-safe quoting for string values.
+Alertmanager is configured by [render-alertmanager-config.sh](../deploy/monitoring/alertmanager/render-alertmanager-config.sh), which generates the YAML at container start from environment variables using shell-safe quoting for string values.
 
 Notifications are delivered by email. The receiver is configured with environment variables so credentials are not hardcoded:
 
