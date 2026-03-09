@@ -352,3 +352,32 @@ where email_record_id=$1 and status='delivered' and meta->>'event_id'='evt-dup'`
 		t.Fatalf("count=%d want=1", count)
 	}
 }
+
+func TestLookupAnalyticsRecordByExternalIDPrefersMostRecentlyUpdatedRecord(t *testing.T) {
+	db := mustTestDB(t)
+	truncateEmailTables(t, db)
+
+	if _, err := db.Exec(context.Background(), `
+insert into users(id,email,status,created_at,updated_at)
+values
+  ('user-old','old@example.com',1,now()-interval '10 minutes',now()-interval '10 minutes'),
+  ('user-new','new@example.com',1,now()-interval '5 minutes',now()-interval '1 minute')`); err != nil {
+		t.Fatalf("insert users: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+insert into email_records(id,user_id,to_email,external_id,status,created_at,updated_at)
+values
+  ('rec-old','user-old','old@example.com','esp-shared','sent',now()-interval '10 minutes',now()-interval '10 minutes'),
+  ('rec-new','user-new','new@example.com','esp-shared','sent',now()-interval '5 minutes',now()-interval '1 minute')`); err != nil {
+		t.Fatalf("insert email records: %v", err)
+	}
+
+	s := &Store{DB: db}
+	record, err := s.LookupAnalyticsRecordByExternalID(context.Background(), "esp-shared")
+	if err != nil {
+		t.Fatalf("LookupAnalyticsRecordByExternalID: %v", err)
+	}
+	if record.UserID != "user-new" || record.Email != "new@example.com" {
+		t.Fatalf("record=%+v want newest record", record)
+	}
+}

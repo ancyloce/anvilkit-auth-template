@@ -266,6 +266,7 @@ select
   ) as sent_at
 from email_records er
 where `+predicate+`
+order by er.updated_at desc, er.created_at desc, er.id desc
 limit 1`,
 		value,
 	).Scan(&record.UserID, &record.Email, &record.SentAt)
