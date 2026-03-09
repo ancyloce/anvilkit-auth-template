@@ -455,7 +455,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 		}
 		return err
 	}
-	if activatedNow {
+	if activatedNow && h.Analytics != nil {
 		if magicLinkDetails != nil {
 			h.track(c, analytics.Event{
 				Name:      "account_activated",
