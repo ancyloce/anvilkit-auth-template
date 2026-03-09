@@ -252,11 +252,19 @@ values($1,$2,$3,'sent',now(),now())`,
 	}
 
 	s := &Store{DB: db}
-	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "delivered", "accepted", "evt-1", map[string]any{"source": "esp"}); err != nil {
+	inserted, err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "delivered", "accepted", "evt-1", map[string]any{"source": "esp"})
+	if err != nil {
 		t.Fatalf("upsert delivered: %v", err)
 	}
-	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "opened", "opened by user", "evt-2", nil); err != nil {
+	if !inserted {
+		t.Fatal("inserted=false want true")
+	}
+	inserted, err = s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-1", "opened", "opened by user", "evt-2", nil)
+	if err != nil {
 		t.Fatalf("upsert opened: %v", err)
+	}
+	if !inserted {
+		t.Fatal("inserted=false want true")
 	}
 
 	var status string
@@ -318,11 +326,19 @@ values($1,$2,$3,'sent',now(),now())`,
 	}
 
 	s := &Store{DB: db}
-	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "first", "evt-dup", nil); err != nil {
+	inserted, err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "first", "evt-dup", nil)
+	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	if err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "duplicate", "evt-dup", nil); err != nil {
+	if !inserted {
+		t.Fatal("first inserted=false want true")
+	}
+	inserted, err = s.UpsertWebhookStatusByExternalID(context.Background(), "esp-webhook-dup", "delivered", "duplicate", "evt-dup", nil)
+	if err != nil {
 		t.Fatalf("duplicate call: %v", err)
+	}
+	if inserted {
+		t.Fatal("duplicate inserted=true want false")
 	}
 
 	var count int

@@ -26,11 +26,12 @@ type fakeStore struct {
 	calls       []statusCall
 	err         error
 	analyticsBy map[string]*workerstore.AnalyticsRecord
+	inserted    bool
 }
 
-func (f *fakeStore) UpsertWebhookStatusByExternalID(_ context.Context, externalID, status, _ string, eventID string, _ map[string]any) error {
+func (f *fakeStore) UpsertWebhookStatusByExternalID(_ context.Context, externalID, status, _ string, eventID string, _ map[string]any) (bool, error) {
 	f.calls = append(f.calls, statusCall{externalID: externalID, status: status, eventID: eventID})
-	return f.err
+	return f.inserted, f.err
 }
 
 func (f *fakeStore) LookupAnalyticsRecordByExternalID(_ context.Context, externalID string) (*workerstore.AnalyticsRecord, error) {
@@ -59,7 +60,7 @@ func (f *fakeAnalytics) Track(_ context.Context, event analytics.Event) error {
 }
 
 func TestEmailStatusWebhook_ValidSignatureProcessesDeliveredAndOpened(t *testing.T) {
-	store := &fakeStore{}
+	store := &fakeStore{inserted: true}
 	h, err := NewHandler(Server{Store: store, Secret: "secret"})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -90,7 +91,7 @@ func TestEmailStatusWebhook_ValidSignatureProcessesDeliveredAndOpened(t *testing
 }
 
 func TestEmailStatusWebhook_InvalidSignatureReturnsUnauthorized(t *testing.T) {
-	store := &fakeStore{}
+	store := &fakeStore{inserted: true}
 	h, err := NewHandler(Server{Store: store, Secret: "secret"})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -111,7 +112,7 @@ func TestEmailStatusWebhook_InvalidSignatureReturnsUnauthorized(t *testing.T) {
 }
 
 func TestEmailStatusWebhook_ExternalIDRequired(t *testing.T) {
-	store := &fakeStore{}
+	store := &fakeStore{inserted: true}
 	h, err := NewHandler(Server{Store: store, Secret: "secret"})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -128,7 +129,7 @@ func TestEmailStatusWebhook_ExternalIDRequired(t *testing.T) {
 }
 
 func TestEmailStatusWebhook_InvalidEventTypeReturnsBadRequest(t *testing.T) {
-	store := &fakeStore{}
+	store := &fakeStore{inserted: true}
 	h, err := NewHandler(Server{Store: store, Secret: "secret"})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -153,6 +154,7 @@ func TestEmailStatusWebhook_BouncedTracksAnalytics(t *testing.T) {
 		analyticsBy: map[string]*workerstore.AnalyticsRecord{
 			"esp-123": {UserID: "user-1", Email: "user@example.com", SentAt: ptrTime(time.Now().Add(-time.Minute))},
 		},
+		inserted: true,
 	}
 	tracker := &fakeAnalytics{}
 	h, err := NewHandler(Server{Store: store, Secret: "secret", Analytics: tracker})
@@ -184,6 +186,36 @@ func TestEmailStatusWebhook_BouncedTracksAnalytics(t *testing.T) {
 	}
 	if event.Timestamp.IsZero() {
 		t.Fatal("timestamp should be set")
+	}
+}
+
+func TestEmailStatusWebhook_DuplicateBounceDoesNotTrackAnalytics(t *testing.T) {
+	store := &fakeStore{
+		analyticsBy: map[string]*workerstore.AnalyticsRecord{
+			"esp-123": {UserID: "user-1", Email: "user@example.com"},
+		},
+		inserted: false,
+	}
+	tracker := &fakeAnalytics{}
+	h, err := NewHandler(Server{Store: store, Secret: "secret", Analytics: tracker})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	payload := `{"external_id":"esp-123","event":"bounced","event_id":"evt-dup","meta":{"bounce_type":"soft"}}`
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/email-status", bytes.NewBufferString(payload))
+	req.Header.Set(signatureHeader, sign("secret", []byte(payload)))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(store.calls) != 1 {
+		t.Fatalf("calls=%d want=1", len(store.calls))
+	}
+	if len(tracker.events) != 0 {
+		t.Fatalf("event count=%d want=0", len(tracker.events))
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 const signatureHeader = "X-ESP-Signature"
 
 type Store interface {
-	UpsertWebhookStatusByExternalID(ctx context.Context, externalID, status, message, eventID string, meta map[string]any) error
+	UpsertWebhookStatusByExternalID(ctx context.Context, externalID, status, message, eventID string, meta map[string]any) (bool, error)
 	LookupAnalyticsRecordByExternalID(ctx context.Context, externalID string) (*workerstore.AnalyticsRecord, error)
 }
 
@@ -87,7 +87,8 @@ func (s Server) handleEmailStatus(w http.ResponseWriter, r *http.Request) {
 	if payload.Meta == nil {
 		payload.Meta = map[string]any{}
 	}
-	if err := s.Store.UpsertWebhookStatusByExternalID(r.Context(), payload.ExternalID, payload.Event, payload.Message, payload.EventID, payload.Meta); err != nil {
+	inserted, err := s.Store.UpsertWebhookStatusByExternalID(r.Context(), payload.ExternalID, payload.Event, payload.Message, payload.EventID, payload.Meta)
+	if err != nil {
 		if errors.Is(err, workerstore.ErrEmailRecordNotFound) {
 			http.Error(w, "email record not found", http.StatusNotFound)
 			return
@@ -98,7 +99,7 @@ func (s Server) handleEmailStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("email-worker webhook: accepted event=%q external_id=%q", payload.Event, payload.ExternalID)
-	if payload.Event == "bounced" {
+	if inserted && payload.Event == "bounced" {
 		s.trackRecordEvent(r.Context(), payload.ExternalID, "verification_email_bounced", map[string]any{
 			"bounce_type": sanitizeBounceType(payload.Meta["bounce_type"]),
 		})
