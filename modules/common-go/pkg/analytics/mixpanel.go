@@ -69,14 +69,38 @@ func (c *mixpanelClient) Track(ctx context.Context, ev Event) error {
 		return fmt.Errorf("mixpanel track request failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	var decoded mixpanelResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil && err != io.EOF {
-		return fmt.Errorf("decode mixpanel response: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return fmt.Errorf("read mixpanel response: %w", err)
 	}
-	if decoded.Status != "" && !strings.EqualFold(decoded.Status, "ok") {
-		return fmt.Errorf("mixpanel track request rejected: %s", firstNonEmpty(decoded.Error, decoded.Status))
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil
+	}
+	if accepted, err := isAcceptedMixpanelResponse(body); err != nil {
+		return err
+	} else if !accepted {
+		return fmt.Errorf("mixpanel track request rejected: %s", strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+func isAcceptedMixpanelResponse(body []byte) (bool, error) {
+	trimmed := strings.TrimSpace(string(body))
+	switch trimmed {
+	case "1":
+		return true, nil
+	case "0":
+		return false, nil
+	}
+
+	var decoded mixpanelResponse
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return false, fmt.Errorf("decode mixpanel response: %w", err)
+	}
+	if decoded.Status == "" {
+		return false, nil
+	}
+	return strings.EqualFold(decoded.Status, "ok"), nil
 }
 
 func firstNonEmpty(values ...string) string {

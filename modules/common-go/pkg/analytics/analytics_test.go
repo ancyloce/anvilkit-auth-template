@@ -130,6 +130,40 @@ func TestMixpanelClientTrackUsesNormalizedEmailForDistinctIDFallback(t *testing.
 	}
 }
 
+func TestMixpanelClientTrackAcceptsPlainTextSuccessBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("1"))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{Enabled: true, MixpanelToken: "mp-token", Endpoint: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	if err := client.Track(context.Background(), Event{Name: "verification_email_sent", Email: "user@example.com"}); err != nil {
+		t.Fatalf("Track() error = %v", err)
+	}
+}
+
+func TestMixpanelClientTrackRejectsPlainTextFailureBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("0"))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{Enabled: true, MixpanelToken: "mp-token", Endpoint: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	if err := client.Track(context.Background(), Event{Name: "verification_email_sent", Email: "user@example.com"}); err == nil {
+		t.Fatal("Track() error = nil, want error")
+	}
+}
+
 func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("ANALYTICS_ENABLED", "true")
 	t.Setenv("MIXPANEL_TOKEN", "token-123")
