@@ -75,7 +75,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "max(email_worker_queue_backlog{queue=\"email:send\"})",
+          "expr": "max(email_worker_queue_backlog)",
           "legendFormat": "backlog",
           "range": true,
           "refId": "A"
@@ -285,7 +285,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "max(email_worker_queue_backlog{queue=\"email:send\"})",
+          "expr": "max(email_worker_queue_backlog)",
           "legendFormat": "backlog",
           "range": true,
           "refId": "A"
