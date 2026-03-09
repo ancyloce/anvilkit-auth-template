@@ -54,6 +54,14 @@ upsert_env() {
   fi
 }
 
+upsert_env_if_set() {
+  local key="$1"
+  local value="${2:-}"
+  if [[ -n "$value" ]]; then
+    upsert_env "$key" "$value"
+  fi
+}
+
 mkdir -p "$DEPLOY_PATH"
 
 if [[ ! -f "$COMPOSE_FILE" ]]; then
@@ -72,6 +80,25 @@ upsert_env "CORS_ALLOW_ORIGINS" "${CORS_ALLOW_ORIGINS:-}"
 upsert_env "ACCESS_TTL_MIN" "${ACCESS_TTL_MIN:-15}"
 upsert_env "REFRESH_TTL_HOURS" "${REFRESH_TTL_HOURS:-168}"
 upsert_env "CORS_ALLOW_CREDENTIALS" "${CORS_ALLOW_CREDENTIALS:-false}"
+upsert_env "EMAIL_QUEUE_NAME" "${EMAIL_QUEUE_NAME:-email:send}"
+upsert_env "EMAIL_QUEUE_POP_TIMEOUT_SEC" "${EMAIL_QUEUE_POP_TIMEOUT_SEC:-5}"
+upsert_env "EMAIL_QUEUE_BACKLOG_POLL_SEC" "${EMAIL_QUEUE_BACKLOG_POLL_SEC:-15}"
+upsert_env "EMAIL_WEBHOOK_ADDR" "${EMAIL_WEBHOOK_ADDR:-:8082}"
+upsert_env "EMAIL_WEBHOOK_SECRET" "${EMAIL_WEBHOOK_SECRET:-}"
+upsert_env "SMTP_HOST" "${SMTP_HOST:-}"
+upsert_env_if_set "SMTP_PORT" "${SMTP_PORT:-}"
+upsert_env_if_set "SMTP_USERNAME" "${SMTP_USERNAME:-}"
+upsert_env_if_set "SMTP_PASSWORD" "${SMTP_PASSWORD:-}"
+upsert_env_if_set "SMTP_FROM_EMAIL" "${SMTP_FROM_EMAIL:-}"
+upsert_env_if_set "SMTP_FROM_NAME" "${SMTP_FROM_NAME:-}"
+upsert_env_if_set "GRAFANA_ADMIN_USER" "${GRAFANA_ADMIN_USER:-}"
+upsert_env_if_set "GRAFANA_ADMIN_PASSWORD" "${GRAFANA_ADMIN_PASSWORD:-}"
+upsert_env_if_set "ALERT_EMAIL_TO" "${ALERT_EMAIL_TO:-}"
+upsert_env_if_set "ALERT_EMAIL_FROM" "${ALERT_EMAIL_FROM:-}"
+upsert_env_if_set "ALERT_SMTP_SMARTHOST" "${ALERT_SMTP_SMARTHOST:-}"
+upsert_env_if_set "ALERT_SMTP_AUTH_USERNAME" "${ALERT_SMTP_AUTH_USERNAME:-}"
+upsert_env_if_set "ALERT_SMTP_AUTH_PASSWORD" "${ALERT_SMTP_AUTH_PASSWORD:-}"
+upsert_env_if_set "ALERT_SMTP_REQUIRE_TLS" "${ALERT_SMTP_REQUIRE_TLS:-}"
 
 chmod 600 "$ENV_FILE"
 
