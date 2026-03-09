@@ -19,11 +19,11 @@ groups:
           description: Email send failure rate has exceeded 5% over the last 10 minutes.
 
       - alert: EmailWorkerQueueBacklogHigh
-        expr: max(email_worker_queue_backlog{queue="email:send"}) > 1000
+        expr: max(email_worker_queue_backlog) > 1000
         for: 1m
         labels:
           severity: critical
           service: email-worker
         annotations:
           summary: Email queue backlog above 1000
-          description: The email queue backlog has exceeded 1000 queued jobs.
+          description: The email queue backlog has exceeded 1000 queued jobs for at least one configured queue.

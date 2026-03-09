@@ -82,7 +82,7 @@ Two alert rules are configured:
    - expression uses `email_worker_send_attempts_total`
 2. `EmailWorkerQueueBacklogHigh`
    - fires when queue backlog is greater than `1000`
-   - expression uses `email_worker_queue_backlog`
+   - expression uses `max(email_worker_queue_backlog)`, so it follows `EMAIL_QUEUE_NAME` without hard-coding a queue label
 
 ## Alert notifications
 
