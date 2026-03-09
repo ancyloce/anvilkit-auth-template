@@ -16,6 +16,7 @@ const (
 	defaultRedisAddr       = "localhost:6379"
 	defaultQueueName       = "email:send"
 	defaultQueueTimeoutSec = 5
+	defaultWebhookAddr     = ":8082"
 	defaultSMTPHost        = "localhost"
 	defaultSMTPPort        = 1025
 	defaultSMTPFromEmail   = "noreply@example.com"
@@ -27,6 +28,8 @@ type Config struct {
 	RedisAddr       string
 	QueueName       string
 	QueuePopTimeout time.Duration
+	WebhookAddr     string
+	WebhookSecret   string
 	SMTPHost        string
 	SMTPPort        int
 	SMTPUsername    string
@@ -46,6 +49,8 @@ func LoadFromEnv() (Config, error) {
 		RedisAddr:       getStringFromEnv("REDIS_ADDR", defaultRedisAddr),
 		QueueName:       getStringFromEnv("EMAIL_QUEUE_NAME", defaultQueueName),
 		QueuePopTimeout: time.Duration(queueTimeoutSec) * time.Second,
+		WebhookAddr:     getStringFromEnv("EMAIL_WEBHOOK_ADDR", defaultWebhookAddr),
+		WebhookSecret:   strings.TrimSpace(os.Getenv("EMAIL_WEBHOOK_SECRET")),
 		SMTPHost:        getStringFromEnv("SMTP_HOST", defaultSMTPHost),
 		SMTPPort:        getIntFromEnv("SMTP_PORT", defaultSMTPPort),
 		SMTPUsername:    getStringFromEnv("SMTP_USERNAME", ""),
@@ -62,6 +67,12 @@ func LoadFromEnv() (Config, error) {
 	}
 	if strings.TrimSpace(cfg.QueueName) == "" {
 		return Config{}, fmt.Errorf("EMAIL_QUEUE_NAME cannot be empty")
+	}
+	if strings.TrimSpace(cfg.WebhookAddr) == "" {
+		return Config{}, fmt.Errorf("EMAIL_WEBHOOK_ADDR cannot be empty")
+	}
+	if cfg.WebhookSecret == "" {
+		return Config{}, fmt.Errorf("EMAIL_WEBHOOK_SECRET cannot be empty")
 	}
 	if strings.TrimSpace(cfg.SMTPHost) == "" {
 		return Config{}, fmt.Errorf("SMTP_HOST cannot be empty")

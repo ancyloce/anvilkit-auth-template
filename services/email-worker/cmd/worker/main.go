@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"anvilkit-auth-template/modules/common-go/pkg/cache/redis"
 	"anvilkit-auth-template/modules/common-go/pkg/db/pgsql"
@@ -14,6 +16,8 @@ import (
 	"anvilkit-auth-template/services/email-worker/internal/consumer"
 	"anvilkit-auth-template/services/email-worker/internal/sender"
 	"anvilkit-auth-template/services/email-worker/internal/store"
+	"anvilkit-auth-template/services/email-worker/internal/webhook"
+	"golang.org/x/sync/errgroup"
 )
 
 func main() {
@@ -46,16 +50,47 @@ func main() {
 		log.Fatal(err)
 	}
 
+	dataStore := &store.Store{DB: db}
 	worker := &consumer.Consumer{
 		Queue:     q,
 		QueueName: cfg.QueueName,
 		Timeout:   cfg.QueuePopTimeout,
 		Sender:    sender.New(cfg.SMTPConfig()),
-		Store:     &store.Store{DB: db},
+		Store:     dataStore,
 	}
 
-	log.Printf("email-worker started: queue=%s redis=%s", cfg.QueueName, cfg.RedisAddr)
-	if err := worker.Run(ctx); err != nil {
+	webhookHandler, err := webhook.NewHandler(webhook.Server{Store: dataStore, Secret: cfg.WebhookSecret})
+	if err != nil {
+		log.Fatal(err)
+	}
+	webhookServer := &http.Server{
+		Addr:              cfg.WebhookAddr,
+		Handler:           webhookHandler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		log.Printf("email-worker webhook server started: addr=%s", cfg.WebhookAddr)
+		if err := webhookServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	})
+	g.Go(func() error {
+		<-gctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return webhookServer.Shutdown(shutdownCtx)
+	})
+	g.Go(func() error {
+		log.Printf("email-worker consumer started: queue=%s redis=%s", cfg.QueueName, cfg.RedisAddr)
+		return worker.Run(gctx)
+	})
+
+	if err := g.Wait(); err != nil {
 		log.Fatal(err)
 	}
 	log.Print("email-worker stopped")
