@@ -62,6 +62,11 @@ upsert_env_if_set() {
   fi
 }
 
+env_value() {
+  local key="$1"
+  awk -F= -v k="$key" '$0 ~ "^" k "=" { sub("^" k "=",""); print; exit }' "$ENV_FILE"
+}
+
 mkdir -p "$DEPLOY_PATH"
 
 if [[ ! -f "$COMPOSE_FILE" ]]; then
@@ -84,8 +89,8 @@ upsert_env "EMAIL_QUEUE_NAME" "${EMAIL_QUEUE_NAME:-email:send}"
 upsert_env "EMAIL_QUEUE_POP_TIMEOUT_SEC" "${EMAIL_QUEUE_POP_TIMEOUT_SEC:-5}"
 upsert_env "EMAIL_QUEUE_BACKLOG_POLL_SEC" "${EMAIL_QUEUE_BACKLOG_POLL_SEC:-15}"
 upsert_env "EMAIL_WEBHOOK_ADDR" "${EMAIL_WEBHOOK_ADDR:-:8082}"
-upsert_env "EMAIL_WEBHOOK_SECRET" "${EMAIL_WEBHOOK_SECRET:-}"
-upsert_env "SMTP_HOST" "${SMTP_HOST:-}"
+upsert_env_if_set "EMAIL_WEBHOOK_SECRET" "${EMAIL_WEBHOOK_SECRET:-}"
+upsert_env_if_set "SMTP_HOST" "${SMTP_HOST:-}"
 upsert_env_if_set "SMTP_PORT" "${SMTP_PORT:-}"
 upsert_env_if_set "SMTP_USERNAME" "${SMTP_USERNAME:-}"
 upsert_env_if_set "SMTP_PASSWORD" "${SMTP_PASSWORD:-}"
@@ -101,6 +106,17 @@ upsert_env_if_set "ALERT_SMTP_AUTH_PASSWORD" "${ALERT_SMTP_AUTH_PASSWORD:-}"
 upsert_env_if_set "ALERT_SMTP_REQUIRE_TLS" "${ALERT_SMTP_REQUIRE_TLS:-}"
 
 chmod 600 "$ENV_FILE"
+
+email_webhook_secret="$(env_value "EMAIL_WEBHOOK_SECRET")"
+smtp_host="$(env_value "SMTP_HOST")"
+if [[ -z "$email_webhook_secret" ]]; then
+  echo "missing required EMAIL_WEBHOOK_SECRET in workflow env or $ENV_FILE" >&2
+  exit 1
+fi
+if [[ -z "$smtp_host" ]]; then
+  echo "missing required SMTP_HOST in workflow env or $ENV_FILE" >&2
+  exit 1
+fi
 
 echo "Checking required env keys in $DEPLOY_PATH/.env"
 grep -E '^(JWT_ISSUER|JWT_AUDIENCE|JWT_SECRET)=' "$ENV_FILE" | sed 's/=.*/=<redacted>/'
