@@ -386,19 +386,6 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 			magicLinkDetails = details
 		}
 	}
-	if magicLinkDetails != nil {
-		props := map[string]any{"latency_from_sent": 0}
-		if magicLinkDetails.SentAt != nil {
-			props["latency_from_sent"] = maxInt64(0, now.UTC().Sub(magicLinkDetails.SentAt.UTC()).Milliseconds())
-		}
-		h.track(c, analytics.Event{
-			Name:       "verification_link_clicked",
-			UserID:     magicLinkDetails.UserID,
-			Email:      magicLinkDetails.Email,
-			Timestamp:  now.UTC(),
-			Properties: props,
-		})
-	}
 
 	if err := h.Store.ValidateMagicLinkToken(c, token, now); err != nil {
 		if errors.Is(err, store.ErrInvalidMagicLink) {
@@ -420,6 +407,19 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 			return nil
 		}
 		return err
+	}
+	if magicLinkDetails != nil {
+		props := map[string]any{"latency_from_sent": 0}
+		if magicLinkDetails.SentAt != nil {
+			props["latency_from_sent"] = maxInt64(0, now.UTC().Sub(magicLinkDetails.SentAt.UTC()).Milliseconds())
+		}
+		h.track(c, analytics.Event{
+			Name:       "verification_link_clicked",
+			UserID:     magicLinkDetails.UserID,
+			Email:      magicLinkDetails.Email,
+			Timestamp:  now.UTC(),
+			Properties: props,
+		})
 	}
 
 	cookieState, err := c.Cookie(magicLinkStateCookieName)

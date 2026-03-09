@@ -137,6 +137,57 @@ func TestVerifyMagicLinkEmitsClickAndActivationEvents(t *testing.T) {
 	}
 }
 
+func TestVerifyMagicLinkExpiredDoesNotEmitClickedEvent(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	tracker := &fakeAnalytics{}
+	r := newAnalyticsRouter(t, db, rdb, tracker)
+
+	registerRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "analytics-expired-click@example.com",
+		"password": "Passw0rd!",
+	})
+	if registerRes.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", registerRes.Code, http.StatusAccepted, registerRes.Body.String())
+	}
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	parsedLink, err := url.Parse(job.MagicLink)
+	if err != nil {
+		t.Fatalf("parse magic link: %v", err)
+	}
+	if _, err := db.Exec(testContext(t), `
+update email_verifications ev
+set expires_at = now() - interval '1 second'
+from users u
+where ev.user_id = u.id
+  and u.email = $1
+  and ev.token_type = 'magic_link'
+  and ev.verified_at is null`, "analytics-expired-click@example.com"); err != nil {
+		t.Fatalf("expire magic_link verification row: %v", err)
+	}
+
+	stateCookie := findCookieByName(registerRes, magicLinkStateCookieName)
+	if stateCookie == nil {
+		t.Fatalf("missing %s cookie", magicLinkStateCookieName)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/verify-magic-link?token="+url.QueryEscape(parsedLink.Query().Get("token"))+"&state="+url.QueryEscape(parsedLink.Query().Get("state")), nil)
+	req.AddCookie(stateCookie)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusGone {
+		t.Fatalf("verify magic link status=%d want=%d body=%s", w.Code, http.StatusGone, w.Body.String())
+	}
+	if len(tracker.events) != 0 {
+		t.Fatalf("event count=%d want=0 events=%+v", len(tracker.events), tracker.events)
+	}
+}
+
 func TestVerifyEmailAfterMagicLinkDoesNotEmitSecondActivation(t *testing.T) {
 	db := newTestDB(t)
 	rdb := newTestRedis(t)
