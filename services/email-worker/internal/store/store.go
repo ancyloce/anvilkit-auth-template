@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -258,9 +259,10 @@ func (s *Store) lookupAnalyticsRecord(ctx context.Context, predicate string, val
 	}
 
 	var record AnalyticsRecord
+	var userID sql.NullString
 	err := s.DB.QueryRow(ctx, `
 select
-  coalesce(er.user_id, ''),
+  er.user_id,
   er.to_email,
   (
     select esh.created_at
@@ -275,12 +277,15 @@ where `+predicate+`
 order by er.updated_at desc, er.created_at desc, er.id desc
 limit 1`,
 		value,
-	).Scan(&record.UserID, &record.Email, &record.SentAt)
+	).Scan(&userID, &record.Email, &record.SentAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrEmailRecordNotFound
 		}
 		return nil, err
+	}
+	if userID.Valid {
+		record.UserID = userID.String
 	}
 	return &record, nil
 }
