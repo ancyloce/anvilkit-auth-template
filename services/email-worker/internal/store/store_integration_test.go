@@ -381,3 +381,49 @@ values
 		t.Fatalf("record=%+v want newest record", record)
 	}
 }
+
+func TestUpsertWebhookStatusByExternalIDPrefersMostRecentlyUpdatedDuplicateRecord(t *testing.T) {
+	db := mustTestDB(t)
+	truncateEmailTables(t, db)
+
+	if _, err := db.Exec(context.Background(), `
+insert into users(id,email,status,created_at,updated_at)
+values
+  ('user-old-webhook','old-webhook@example.com',1,now()-interval '10 minutes',now()-interval '10 minutes'),
+  ('user-new-webhook','new-webhook@example.com',1,now()-interval '5 minutes',now()-interval '1 minute')`); err != nil {
+		t.Fatalf("insert users: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+insert into email_records(id,user_id,to_email,external_id,status,created_at,updated_at)
+values
+  ('rec-webhook-old','user-old-webhook','old-webhook@example.com','esp-dup-webhook','sent',now()-interval '10 minutes',now()-interval '10 minutes'),
+  ('rec-webhook-new','user-new-webhook','new-webhook@example.com','esp-dup-webhook','sent',now()-interval '5 minutes',now()-interval '1 minute')`); err != nil {
+		t.Fatalf("insert email records: %v", err)
+	}
+
+	s := &Store{DB: db}
+	inserted, err := s.UpsertWebhookStatusByExternalID(context.Background(), "esp-dup-webhook", "bounced", "hard bounce", "evt-webhook-dup", map[string]any{"bounce_type": "hard"})
+	if err != nil {
+		t.Fatalf("UpsertWebhookStatusByExternalID: %v", err)
+	}
+	if !inserted {
+		t.Fatal("inserted=false want true")
+	}
+
+	var newCount, oldCount int
+	if err := db.QueryRow(context.Background(), `
+select count(*)
+from email_status_history
+where email_record_id='rec-webhook-new' and status='bounced'`).Scan(&newCount); err != nil {
+		t.Fatalf("query new record history: %v", err)
+	}
+	if err := db.QueryRow(context.Background(), `
+select count(*)
+from email_status_history
+where email_record_id='rec-webhook-old' and status='bounced'`).Scan(&oldCount); err != nil {
+		t.Fatalf("query old record history: %v", err)
+	}
+	if newCount != 1 || oldCount != 0 {
+		t.Fatalf("history counts new=%d old=%d want new=1 old=0", newCount, oldCount)
+	}
+}

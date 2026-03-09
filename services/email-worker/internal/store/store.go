@@ -187,7 +187,13 @@ func (s *Store) UpsertWebhookStatusByExternalID(ctx context.Context, externalID,
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var recordID string
-	if err := tx.QueryRow(ctx, `select id from email_records where external_id=$1 for update`, externalID).Scan(&recordID); err != nil {
+	if err := tx.QueryRow(ctx, `
+select id
+from email_records
+where external_id=$1
+order by updated_at desc, created_at desc, id desc
+limit 1
+for update`, externalID).Scan(&recordID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, ErrEmailRecordNotFound
 		}
