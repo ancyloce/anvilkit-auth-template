@@ -2,8 +2,10 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,9 +13,41 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 
+	"anvilkit-auth-template/modules/common-go/pkg/analytics"
 	"anvilkit-auth-template/services/auth-api/internal/store"
 	"anvilkit-auth-template/services/auth-api/internal/testutil"
 )
+
+type capturedEvent struct {
+	Name       string
+	UserID     string
+	Email      string
+	Timestamp  time.Time
+	Properties map[string]any
+}
+
+type fakeAnalytics struct {
+	mu     sync.Mutex
+	events []capturedEvent
+	err    error
+}
+
+func (f *fakeAnalytics) Track(_ context.Context, event analytics.Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	props := make(map[string]any, len(event.Properties))
+	for k, v := range event.Properties {
+		props[k] = v
+	}
+	f.events = append(f.events, capturedEvent{
+		Name:       event.Name,
+		UserID:     event.UserID,
+		Email:      event.Email,
+		Timestamp:  event.Timestamp,
+		Properties: props,
+	})
+	return f.err
+}
 
 func newTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -69,6 +103,7 @@ func newTestAuthHandler(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client) *Ha
 	return &Handler{
 		Store:           &store.Store{DB: db},
 		Redis:           rdb,
+		Analytics:       analytics.NoopClient{},
 		JWTIssuer:       "anvilkit-auth",
 		JWTAudience:     "anvilkit-clients",
 		JWTSecret:       mustJWTSecret(t),

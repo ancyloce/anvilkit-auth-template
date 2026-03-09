@@ -12,7 +12,9 @@ import (
 	texttemplate "text/template"
 	"time"
 
+	"anvilkit-auth-template/modules/common-go/pkg/analytics"
 	"anvilkit-auth-template/services/email-worker/internal/sender"
+	workerstore "anvilkit-auth-template/services/email-worker/internal/store"
 	emailtemplates "anvilkit-auth-template/services/email-worker/templates"
 )
 
@@ -52,6 +54,7 @@ type Store interface {
 	MarkBounced(ctx context.Context, recordID, reason, bounceType string, smtpCode, retryCount int) error
 	Blacklist(ctx context.Context, emailAddr, reason string) error
 	IsBlacklisted(ctx context.Context, emailAddr string) (bool, error)
+	LookupAnalyticsRecordByID(ctx context.Context, recordID string) (*workerstore.AnalyticsRecord, error)
 }
 
 type Scheduler interface {
@@ -82,6 +85,7 @@ type Consumer struct {
 	Timeout   time.Duration
 	Sender    Sender
 	Store     Store
+	Analytics analytics.Client
 	Scheduler Scheduler
 }
 
@@ -178,6 +182,7 @@ func (c *Consumer) handleJob(ctx context.Context, job EmailJob) error {
 	if err := c.Store.MarkSent(ctx, job.RecordID, externalID); err != nil {
 		return err
 	}
+	c.trackVerificationEmailSent(ctx, job.RecordID)
 
 	return nil
 }
@@ -197,6 +202,7 @@ func (c *Consumer) handleDeliveryError(ctx context.Context, job EmailJob, sendEr
 		if err := c.Store.MarkBounced(ctx, job.RecordID, sendErr.Error(), string(sender.BounceTypeHard), smtpCode, job.RetryCount); err != nil {
 			return err
 		}
+		c.trackVerificationEmailBounced(ctx, job.RecordID, string(sender.BounceTypeHard))
 		if err := c.Store.Blacklist(ctx, job.To, sendErr.Error()); err != nil {
 			return err
 		}
@@ -205,6 +211,7 @@ func (c *Consumer) handleDeliveryError(ctx context.Context, job EmailJob, sendEr
 		if err := c.Store.MarkBounced(ctx, job.RecordID, sendErr.Error(), string(sender.BounceTypeSoft), smtpCode, job.RetryCount); err != nil {
 			return err
 		}
+		c.trackVerificationEmailBounced(ctx, job.RecordID, string(sender.BounceTypeSoft))
 		if job.RetryCount >= len(softBounceRetryIntervals) {
 			if err := c.Store.MarkFailed(ctx, job.RecordID, ErrSoftBounceExceeded.Error()); err != nil {
 				return err
@@ -259,4 +266,32 @@ func isPayloadDecodeError(err error) bool {
 	var syntaxErr *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError
 	return errors.As(err, &syntaxErr) || errors.As(err, &typeErr)
+}
+
+func (c *Consumer) trackVerificationEmailSent(ctx context.Context, recordID string) {
+	c.trackRecordEvent(ctx, recordID, "verification_email_sent", nil)
+}
+
+func (c *Consumer) trackVerificationEmailBounced(ctx context.Context, recordID, bounceType string) {
+	c.trackRecordEvent(ctx, recordID, "verification_email_bounced", map[string]any{"bounce_type": bounceType})
+}
+
+func (c *Consumer) trackRecordEvent(ctx context.Context, recordID, eventName string, props map[string]any) {
+	if c.Analytics == nil {
+		return
+	}
+	record, err := c.Store.LookupAnalyticsRecordByID(ctx, recordID)
+	if err != nil {
+		log.Printf("email-worker analytics: lookup record_id=%q failed: %v", recordID, err)
+		return
+	}
+	if err := c.Analytics.Track(ctx, analytics.Event{
+		Name:       eventName,
+		UserID:     record.UserID,
+		Email:      record.Email,
+		Timestamp:  time.Now().UTC(),
+		Properties: props,
+	}); err != nil {
+		log.Printf("email-worker analytics: track event=%q record_id=%q failed: %v", eventName, recordID, err)
+	}
 }

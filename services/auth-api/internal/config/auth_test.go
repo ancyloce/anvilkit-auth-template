@@ -96,6 +96,20 @@ func TestLoadAuthConfigFromEnvInvalidPublicBaseURL(t *testing.T) {
 	}
 }
 
+func TestLoadAuthConfigFromEnvAnalyticsEnabledRequiresToken(t *testing.T) {
+	setRequiredAuthEnv(t)
+	t.Setenv("ANALYTICS_ENABLED", "true")
+	t.Setenv("MIXPANEL_TOKEN", "")
+
+	_, err := LoadAuthConfigFromEnv()
+	if err == nil {
+		t.Fatal("LoadAuthConfigFromEnv() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "MIXPANEL_TOKEN") {
+		t.Fatalf("LoadAuthConfigFromEnv() error = %q, want mention MIXPANEL_TOKEN", err)
+	}
+}
+
 func setRequiredAuthEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("JWT_ISSUER", "anvilkit-auth")

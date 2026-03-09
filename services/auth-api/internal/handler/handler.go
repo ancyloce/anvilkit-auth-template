@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"log"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	goredis "github.com/redis/go-redis/v9"
 
+	"anvilkit-auth-template/modules/common-go/pkg/analytics"
 	ajwt "anvilkit-auth-template/modules/common-go/pkg/auth/jwt"
 	commonemail "anvilkit-auth-template/modules/common-go/pkg/email"
 	"anvilkit-auth-template/modules/common-go/pkg/httpx/apperr"
@@ -74,6 +76,7 @@ type emailSendJob struct {
 type Handler struct {
 	Store           *store.Store
 	Redis           *goredis.Client
+	Analytics       analytics.Client
 	JWTIssuer       string
 	JWTAudience     string
 	JWTSecret       string
@@ -338,6 +341,19 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 		}
 		return err
 	}
+	if user, err := h.Store.LookupAnalyticsUserByEmail(c, emailAddr); err != nil {
+		log.Printf("auth-api analytics: lookup otp activation user email=%q: %v", emailAddr, err)
+	} else {
+		h.track(c, analytics.Event{
+			Name:      "account_activated",
+			UserID:    user.UserID,
+			Email:     user.Email,
+			Timestamp: time.Now().UTC(),
+			Properties: map[string]any{
+				"method": "otp",
+			},
+		})
+	}
 
 	resp.OK(c, dto.VerifyEmailResponse{Message: "Email verified successfully"})
 	return nil
@@ -356,6 +372,23 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 		return nil
 	}
 	now := time.Now()
+	if details, err := h.Store.LookupMagicLinkAnalytics(c, token); err != nil {
+		if !errors.Is(err, store.ErrInvalidMagicLink) && !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("auth-api analytics: lookup magic-link details failed: %v", err)
+		}
+	} else {
+		props := map[string]any{"latency_from_sent": 0}
+		if details.SentAt != nil {
+			props["latency_from_sent"] = maxInt64(0, now.UTC().Sub(details.SentAt.UTC()).Milliseconds())
+		}
+		h.track(c, analytics.Event{
+			Name:       "verification_link_clicked",
+			UserID:     details.UserID,
+			Email:      details.Email,
+			Timestamp:  now.UTC(),
+			Properties: props,
+		})
+	}
 
 	if err := h.Store.ValidateMagicLinkToken(c, token, now); err != nil {
 		if errors.Is(err, store.ErrInvalidMagicLink) {
@@ -411,6 +444,19 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 		}
 		return err
 	}
+	if details, err := h.Store.LookupMagicLinkAnalytics(c, token); err != nil {
+		log.Printf("auth-api analytics: lookup magic-link activation details failed: %v", err)
+	} else {
+		h.track(c, analytics.Event{
+			Name:      "account_activated",
+			UserID:    details.UserID,
+			Email:     details.Email,
+			Timestamp: time.Now().UTC(),
+			Properties: map[string]any{
+				"method": "magic_link",
+			},
+		})
+	}
 
 	clearMagicLinkStateCookie(c)
 	c.Redirect(http.StatusFound, buildMagicLinkSuccessURL(h.PublicBaseURL))
@@ -434,6 +480,22 @@ func buildMagicLink(publicBaseURL, token, state string) string {
 	query.Set("state", state)
 	u.RawQuery = query.Encode()
 	return u.String()
+}
+
+func (h *Handler) track(ctx context.Context, event analytics.Event) {
+	if h.Analytics == nil {
+		return
+	}
+	if err := h.Analytics.Track(ctx, event); err != nil {
+		log.Printf("auth-api analytics: track event=%q failed: %v", event.Name, err)
+	}
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func buildMagicLinkSuccessURL(publicBaseURL string) string {

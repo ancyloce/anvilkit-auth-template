@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,6 +23,12 @@ var (
 
 type Store struct {
 	DB *pgxpool.Pool
+}
+
+type AnalyticsRecord struct {
+	UserID string
+	Email  string
+	SentAt *time.Time
 }
 
 func (s *Store) MarkSent(ctx context.Context, recordID, externalID string) error {
@@ -223,4 +230,44 @@ select exists(
 	}
 
 	return tx.Commit(ctx)
+}
+
+func (s *Store) LookupAnalyticsRecordByID(ctx context.Context, recordID string) (*AnalyticsRecord, error) {
+	return s.lookupAnalyticsRecord(ctx, "er.id = $1", strings.TrimSpace(recordID))
+}
+
+func (s *Store) LookupAnalyticsRecordByExternalID(ctx context.Context, externalID string) (*AnalyticsRecord, error) {
+	return s.lookupAnalyticsRecord(ctx, "er.external_id = $1", strings.TrimSpace(externalID))
+}
+
+func (s *Store) lookupAnalyticsRecord(ctx context.Context, predicate string, value string) (*AnalyticsRecord, error) {
+	if s.DB == nil {
+		return nil, ErrNilDB
+	}
+
+	var record AnalyticsRecord
+	err := s.DB.QueryRow(ctx, `
+select
+  coalesce(er.user_id, ''),
+  er.to_email,
+  (
+    select esh.created_at
+    from email_status_history esh
+    where esh.email_record_id = er.id
+      and esh.status = 'sent'
+    order by esh.created_at desc
+    limit 1
+  ) as sent_at
+from email_records er
+where `+predicate+`
+limit 1`,
+		value,
+	).Scan(&record.UserID, &record.Email, &record.SentAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrEmailRecordNotFound
+		}
+		return nil, err
+	}
+	return &record, nil
 }

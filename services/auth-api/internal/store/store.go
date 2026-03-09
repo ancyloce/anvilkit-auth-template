@@ -80,6 +80,17 @@ type ResendVerificationResult struct {
 	RevokedVerifications []RevokedVerificationSnapshot
 }
 
+type AnalyticsUser struct {
+	UserID string
+	Email  string
+}
+
+type MagicLinkAnalytics struct {
+	UserID string
+	Email  string
+	SentAt *time.Time
+}
+
 type LoginUser struct {
 	ID              string
 	Email           string
@@ -446,6 +457,51 @@ for update`,
 	}
 
 	return tx.Commit(ctx)
+}
+
+func (s *Store) LookupAnalyticsUserByEmail(ctx context.Context, emailAddr string) (*AnalyticsUser, error) {
+	var user AnalyticsUser
+	err := s.DB.QueryRow(ctx, `
+select id, email
+from users
+where email = $1`,
+		emailAddr,
+	).Scan(&user.UserID, &user.Email)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (s *Store) LookupMagicLinkAnalytics(ctx context.Context, magicToken string) (*MagicLinkAnalytics, error) {
+	tokenHash := email.HashToken(magicToken)
+	var result MagicLinkAnalytics
+	err := s.DB.QueryRow(ctx, `
+select
+  ev.user_id,
+  u.email,
+  (
+    select esh.created_at
+    from email_status_history esh
+    join email_records er on er.id = esh.email_record_id
+    where er.user_id = ev.user_id
+      and er.template = 'verification_email'
+      and esh.status = 'sent'
+    order by esh.created_at desc
+    limit 1
+  ) as sent_at
+from email_verifications ev
+join users u on u.id = ev.user_id
+where ev.token_type = 'magic_link'
+  and ev.token_hash = $1
+order by ev.created_at desc, ev.id desc
+limit 1`,
+		tokenHash,
+	).Scan(&result.UserID, &result.Email, &result.SentAt)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func (s *Store) ValidateMagicLinkToken(ctx context.Context, magicToken string, now time.Time) error {

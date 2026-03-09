@@ -12,19 +12,23 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
-	"anvilkit-auth-template/services/email-worker/internal/store"
+	"anvilkit-auth-template/modules/common-go/pkg/analytics"
+	workerstore "anvilkit-auth-template/services/email-worker/internal/store"
 )
 
 const signatureHeader = "X-ESP-Signature"
 
 type Store interface {
 	UpsertWebhookStatusByExternalID(ctx context.Context, externalID, status, message, eventID string, meta map[string]any) error
+	LookupAnalyticsRecordByExternalID(ctx context.Context, externalID string) (*workerstore.AnalyticsRecord, error)
 }
 
 type Server struct {
-	Store  Store
-	Secret string
+	Store     Store
+	Secret    string
+	Analytics analytics.Client
 }
 
 type callbackPayload struct {
@@ -84,7 +88,7 @@ func (s Server) handleEmailStatus(w http.ResponseWriter, r *http.Request) {
 		payload.Meta = map[string]any{}
 	}
 	if err := s.Store.UpsertWebhookStatusByExternalID(r.Context(), payload.ExternalID, payload.Event, payload.Message, payload.EventID, payload.Meta); err != nil {
-		if errors.Is(err, store.ErrEmailRecordNotFound) {
+		if errors.Is(err, workerstore.ErrEmailRecordNotFound) {
 			http.Error(w, "email record not found", http.StatusNotFound)
 			return
 		}
@@ -94,6 +98,11 @@ func (s Server) handleEmailStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("email-worker webhook: accepted event=%q external_id=%q", payload.Event, payload.ExternalID)
+	if payload.Event == "bounced" {
+		s.trackRecordEvent(r.Context(), payload.ExternalID, "verification_email_bounced", map[string]any{
+			"bounce_type": sanitizeBounceType(payload.Meta["bounce_type"]),
+		})
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"ok":true}`))
 }
@@ -126,4 +135,32 @@ func verifySignature(secret, provided string, body []byte) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare(sig, expected) == 1
+}
+
+func (s Server) trackRecordEvent(ctx context.Context, externalID, eventName string, props map[string]any) {
+	if s.Analytics == nil {
+		return
+	}
+	record, err := s.Store.LookupAnalyticsRecordByExternalID(ctx, externalID)
+	if err != nil {
+		log.Printf("email-worker analytics: lookup external_id=%q failed: %v", externalID, err)
+		return
+	}
+	if err := s.Analytics.Track(ctx, analytics.Event{
+		Name:       eventName,
+		UserID:     record.UserID,
+		Email:      record.Email,
+		Timestamp:  time.Now().UTC(),
+		Properties: props,
+	}); err != nil {
+		log.Printf("email-worker analytics: track event=%q external_id=%q failed: %v", eventName, externalID, err)
+	}
+}
+
+func sanitizeBounceType(raw any) string {
+	value, ok := raw.(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return strings.TrimSpace(strings.ToLower(value))
 }

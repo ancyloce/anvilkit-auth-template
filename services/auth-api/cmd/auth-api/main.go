@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"anvilkit-auth-template/modules/common-go/pkg/analytics"
 	"anvilkit-auth-template/modules/common-go/pkg/cache/redis"
 	"anvilkit-auth-template/modules/common-go/pkg/cfg"
 	"anvilkit-auth-template/modules/common-go/pkg/db/pgsql"
@@ -30,10 +31,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	analyticsClient, err := analytics.NewClient(authCfg.Analytics)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	h := &handler.Handler{
 		Store:           &store.Store{DB: db},
 		Redis:           rdb,
+		Analytics:       analyticsClient,
 		JWTIssuer:       authCfg.JWTIssuer,
 		JWTAudience:     authCfg.JWTAudience,
 		JWTSecret:       authCfg.JWTSecret,

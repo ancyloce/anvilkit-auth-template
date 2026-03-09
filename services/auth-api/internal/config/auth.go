@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"anvilkit-auth-template/modules/common-go/pkg/analytics"
 )
 
 const (
@@ -24,6 +26,7 @@ type AuthConfig struct {
 	JWTAudience     string
 	JWTSecret       string
 	PublicBaseURL   string
+	Analytics       analytics.Config
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
 	PasswordMinLen  int
@@ -77,12 +80,17 @@ func LoadAuthConfigFromEnv() (AuthConfig, error) {
 	if err != nil {
 		return AuthConfig{}, err
 	}
+	analyticsCfg, err := analytics.LoadConfigFromEnv()
+	if err != nil {
+		return AuthConfig{}, err
+	}
 
 	return AuthConfig{
 		JWTIssuer:       issuer,
 		JWTAudience:     audience,
 		JWTSecret:       secret,
 		PublicBaseURL:   publicBaseURL,
+		Analytics:       analyticsCfg,
 		AccessTTL:       time.Duration(accessTTLMin) * time.Minute,
 		RefreshTTL:      time.Duration(refreshTTLHours) * time.Hour,
 		PasswordMinLen:  passwordMinLen,
