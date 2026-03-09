@@ -199,10 +199,10 @@ jobs:
             -e ALERT_EMAIL_FROM=alerts@example.com \
             -e ALERT_SMTP_SMARTHOST=mailpit:1025 \
             -e ALERT_SMTP_AUTH_USERNAME= \
-            -e ALERT_SMTP_AUTH_PASSWORD= \
+            -e ALERT_SMTP_AUTH_PASSWORD='p@ss&word|with\chars' \
             -e ALERT_SMTP_REQUIRE_TLS=false \
             prom/alertmanager:v0.28.1 \
-            -ec 'sed -e "s|__ALERT_EMAIL_TO__|${ALERT_EMAIL_TO}|g" -e "s|__ALERT_EMAIL_FROM__|${ALERT_EMAIL_FROM}|g" -e "s|__ALERT_SMTP_SMARTHOST__|${ALERT_SMTP_SMARTHOST}|g" -e "s|__ALERT_SMTP_AUTH_USERNAME__|${ALERT_SMTP_AUTH_USERNAME}|g" -e "s|__ALERT_SMTP_AUTH_PASSWORD__|${ALERT_SMTP_AUTH_PASSWORD}|g" -e "s|__ALERT_SMTP_REQUIRE_TLS__|${ALERT_SMTP_REQUIRE_TLS}|g" /config/alertmanager.yml.tmpl > /tmp/alertmanager.yml && alertmanager --config.file=/tmp/alertmanager.yml --log.level=error --cluster.listen-address= >/tmp/alertmanager.log 2>&1 & pid=$!; sleep 2; kill $pid; wait $pid || test $? -eq 143'
+            -ec 'sh /config/render-alertmanager-config.sh /tmp/alertmanager.yml && alertmanager --config.file=/tmp/alertmanager.yml --log.level=error --cluster.listen-address= >/tmp/alertmanager.log 2>&1 & pid=$!; sleep 2; kill $pid; wait $pid || test $? -eq 143'
 
   lint:
     runs-on: ubuntu-latest

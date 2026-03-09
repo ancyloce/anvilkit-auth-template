@@ -88,7 +88,7 @@ Two alert rules are configured:
 
 ## Alert notifications
 
-Alertmanager is configured from the template [deploy/monitoring/alertmanager/alertmanager.yml.tmpl](/root/Rhett/anvilkit-auth-template/deploy/monitoring/alertmanager/alertmanager.yml.tmpl), which is rendered at container start from environment variables.
+Alertmanager is configured by [render-alertmanager-config.sh](/root/Rhett/anvilkit-auth-template/deploy/monitoring/alertmanager/render-alertmanager-config.sh), which generates the YAML at container start from environment variables using shell-safe quoting for string values.
 
 Notifications are delivered by email. The receiver is configured with environment variables so credentials are not hardcoded:
 
@@ -210,5 +210,5 @@ Useful local validation commands:
 ```bash
 go test ./services/email-worker/... -count=1
 docker run --rm --entrypoint promtool -v "$PWD/deploy/monitoring/prometheus/alerts:/rules:ro" prom/prometheus:v3.5.0 check rules /rules/email-worker.rules.yml
-docker run --rm --entrypoint sh -v "$PWD/deploy/monitoring/alertmanager:/config:ro" -e ALERT_EMAIL_TO=alerts@example.com -e ALERT_EMAIL_FROM=alerts@example.com -e ALERT_SMTP_SMARTHOST=mailpit:1025 -e ALERT_SMTP_AUTH_USERNAME= -e ALERT_SMTP_AUTH_PASSWORD= -e ALERT_SMTP_REQUIRE_TLS=false prom/alertmanager:v0.28.1 -ec 'sed -e "s|__ALERT_EMAIL_TO__|${ALERT_EMAIL_TO}|g" -e "s|__ALERT_EMAIL_FROM__|${ALERT_EMAIL_FROM}|g" -e "s|__ALERT_SMTP_SMARTHOST__|${ALERT_SMTP_SMARTHOST}|g" -e "s|__ALERT_SMTP_AUTH_USERNAME__|${ALERT_SMTP_AUTH_USERNAME}|g" -e "s|__ALERT_SMTP_AUTH_PASSWORD__|${ALERT_SMTP_AUTH_PASSWORD}|g" -e "s|__ALERT_SMTP_REQUIRE_TLS__|${ALERT_SMTP_REQUIRE_TLS}|g" /config/alertmanager.yml.tmpl > /tmp/alertmanager.yml && alertmanager --config.file=/tmp/alertmanager.yml --log.level=error --cluster.listen-address= >/tmp/alertmanager.log 2>&1 & pid=$!; sleep 2; kill $pid; wait $pid || test $? -eq 143'
+docker run --rm --entrypoint sh -v "$PWD/deploy/monitoring/alertmanager:/config:ro" -e ALERT_EMAIL_TO=alerts@example.com -e ALERT_EMAIL_FROM=alerts@example.com -e ALERT_SMTP_SMARTHOST=mailpit:1025 -e ALERT_SMTP_AUTH_USERNAME= -e ALERT_SMTP_AUTH_PASSWORD='p@ss&word|with\chars' -e ALERT_SMTP_REQUIRE_TLS=false prom/alertmanager:v0.28.1 -ec 'sh /config/render-alertmanager-config.sh /tmp/alertmanager.yml && alertmanager --config.file=/tmp/alertmanager.yml --log.level=error --cluster.listen-address= >/tmp/alertmanager.log 2>&1 & pid=$!; sleep 2; kill $pid; wait $pid || test $? -eq 143'
 ```

@@ -142,7 +142,7 @@ services:
     entrypoint:
       - /bin/sh
       - -ec
-      - sed -e "s|__ALERT_EMAIL_TO__|$${ALERT_EMAIL_TO}|g" -e "s|__ALERT_EMAIL_FROM__|$${ALERT_EMAIL_FROM}|g" -e "s|__ALERT_SMTP_SMARTHOST__|$${ALERT_SMTP_SMARTHOST}|g" -e "s|__ALERT_SMTP_AUTH_USERNAME__|$${ALERT_SMTP_AUTH_USERNAME}|g" -e "s|__ALERT_SMTP_AUTH_PASSWORD__|$${ALERT_SMTP_AUTH_PASSWORD}|g" -e "s|__ALERT_SMTP_REQUIRE_TLS__|$${ALERT_SMTP_REQUIRE_TLS}|g" /etc/alertmanager/alertmanager.yml.tmpl > /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
+      - sh /etc/alertmanager/render-alertmanager-config.sh /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
     environment:
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-alerts@example.com}
       ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-alerts@anvilkit.local}
@@ -153,7 +153,7 @@ services:
     ports:
       - "9093:9093"
     volumes:
-      - ./monitoring/alertmanager/alertmanager.yml.tmpl:/etc/alertmanager/alertmanager.yml.tmpl:ro
+      - ./monitoring/alertmanager/render-alertmanager-config.sh:/etc/alertmanager/render-alertmanager-config.sh:ro
 
   grafana:
     image: grafana/grafana:12.1.1
