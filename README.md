@@ -62,6 +62,7 @@ Response `data` returns `tenant` and `owner_user` in unified Envelope format.
 | `LOGIN_FAIL_WINDOW_MIN` | no | `10` | Failed login rate limit window (minutes) |
 | `ANALYTICS_ENABLED` | no | `false` | Enable Mixpanel analytics emission in `auth-api` and `email-worker` |
 | `MIXPANEL_TOKEN` | when analytics enabled | — | Mixpanel project token used for server-side event tracking |
+| `MIXPANEL_API_ENDPOINT` | no | `https://api.mixpanel.com/track` | Override the Mixpanel track endpoint for proxies, mocks, or local testing |
 | `CORS_ALLOW_ORIGINS` | no | `http://localhost:3000` | Allowed CORS origins |
 | `CORS_ALLOW_CREDENTIALS` | no | `true` | CORS credentials flag (required for browser cookie-based magic-link same-device verification in SPA flows) |
 | `RBAC_DIR` | no | `internal/rbac` | Casbin config directory (admin-api only) |
