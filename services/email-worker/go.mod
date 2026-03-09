@@ -1,6 +1,6 @@
 module anvilkit-auth-template/services/email-worker
 
-go 1.23.0
+go 1.23
 
 toolchain go1.24.13
 
