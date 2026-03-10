@@ -54,6 +54,19 @@ upsert_env() {
   fi
 }
 
+upsert_env_if_set() {
+  local key="$1"
+  local value="${2:-}"
+  if [[ -n "$value" ]]; then
+    upsert_env "$key" "$value"
+  fi
+}
+
+env_value() {
+  local key="$1"
+  awk -F= -v k="$key" '$0 ~ "^" k "=" { sub("^" k "=",""); print; exit }' "$ENV_FILE"
+}
+
 mkdir -p "$DEPLOY_PATH"
 
 if [[ ! -f "$COMPOSE_FILE" ]]; then
@@ -72,8 +85,39 @@ upsert_env "CORS_ALLOW_ORIGINS" "${CORS_ALLOW_ORIGINS:-}"
 upsert_env "ACCESS_TTL_MIN" "${ACCESS_TTL_MIN:-15}"
 upsert_env "REFRESH_TTL_HOURS" "${REFRESH_TTL_HOURS:-168}"
 upsert_env "CORS_ALLOW_CREDENTIALS" "${CORS_ALLOW_CREDENTIALS:-false}"
+upsert_env "EMAIL_QUEUE_NAME" "${EMAIL_QUEUE_NAME:-email:send}"
+upsert_env "EMAIL_QUEUE_POP_TIMEOUT_SEC" "${EMAIL_QUEUE_POP_TIMEOUT_SEC:-5}"
+upsert_env "EMAIL_QUEUE_BACKLOG_POLL_SEC" "${EMAIL_QUEUE_BACKLOG_POLL_SEC:-15}"
+upsert_env "EMAIL_METRICS_ADDR" "${EMAIL_METRICS_ADDR:-:9090}"
+upsert_env "EMAIL_WEBHOOK_ADDR" "${EMAIL_WEBHOOK_ADDR:-:8082}"
+upsert_env_if_set "EMAIL_WEBHOOK_SECRET" "${EMAIL_WEBHOOK_SECRET:-}"
+upsert_env_if_set "SMTP_HOST" "${SMTP_HOST:-}"
+upsert_env_if_set "SMTP_PORT" "${SMTP_PORT:-}"
+upsert_env_if_set "SMTP_USERNAME" "${SMTP_USERNAME:-}"
+upsert_env_if_set "SMTP_PASSWORD" "${SMTP_PASSWORD:-}"
+upsert_env_if_set "SMTP_FROM_EMAIL" "${SMTP_FROM_EMAIL:-}"
+upsert_env_if_set "SMTP_FROM_NAME" "${SMTP_FROM_NAME:-}"
+upsert_env_if_set "GRAFANA_ADMIN_USER" "${GRAFANA_ADMIN_USER:-}"
+upsert_env_if_set "GRAFANA_ADMIN_PASSWORD" "${GRAFANA_ADMIN_PASSWORD:-}"
+upsert_env_if_set "ALERT_EMAIL_TO" "${ALERT_EMAIL_TO:-}"
+upsert_env_if_set "ALERT_EMAIL_FROM" "${ALERT_EMAIL_FROM:-}"
+upsert_env_if_set "ALERT_SMTP_SMARTHOST" "${ALERT_SMTP_SMARTHOST:-}"
+upsert_env_if_set "ALERT_SMTP_AUTH_USERNAME" "${ALERT_SMTP_AUTH_USERNAME:-}"
+upsert_env_if_set "ALERT_SMTP_AUTH_PASSWORD" "${ALERT_SMTP_AUTH_PASSWORD:-}"
+upsert_env_if_set "ALERT_SMTP_REQUIRE_TLS" "${ALERT_SMTP_REQUIRE_TLS:-}"
 
 chmod 600 "$ENV_FILE"
+
+email_webhook_secret="$(env_value "EMAIL_WEBHOOK_SECRET")"
+smtp_host="$(env_value "SMTP_HOST")"
+if [[ -z "$email_webhook_secret" ]]; then
+  echo "missing required EMAIL_WEBHOOK_SECRET in workflow env or $ENV_FILE" >&2
+  exit 1
+fi
+if [[ -z "$smtp_host" ]]; then
+  echo "missing required SMTP_HOST in workflow env or $ENV_FILE" >&2
+  exit 1
+fi
 
 echo "Checking required env keys in $DEPLOY_PATH/.env"
 grep -E '^(JWT_ISSUER|JWT_AUDIENCE|JWT_SECRET)=' "$ENV_FILE" | sed 's/=.*/=<redacted>/'
@@ -168,7 +212,7 @@ echo "Logging in to ghcr.io as ${GHCR_USERNAME}"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin >/dev/null
 trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
-"${compose_cmd[@]}" pull auth-api admin-api
+"${compose_cmd[@]}" pull auth-api admin-api email-worker
 
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
   echo "Starting internal dependencies (pg, redis)..."
@@ -219,9 +263,9 @@ if ! run_migrate; then
 fi
 
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
-  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api
+  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api email-worker prometheus grafana alertmanager
 else
-  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api
+  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api email-worker prometheus grafana alertmanager
 fi
 
 echo "Container JWT env diagnostics (redacted):"
@@ -230,6 +274,7 @@ echo "Container JWT env diagnostics (redacted):"
 healthcheck() {
   curl -fsS --max-time 5 http://127.0.0.1:8080/healthz >/dev/null
   curl -fsS --max-time 5 http://127.0.0.1:8081/healthz >/dev/null
+  curl -fsS --max-time 5 http://127.0.0.1:8082/healthz >/dev/null
 }
 
 if healthcheck; then
@@ -258,11 +303,11 @@ compose_cmd=(
   -f "$COMPOSE_FILE"
   --env-file "$ENV_FILE"
 )
-"${compose_cmd[@]}" pull auth-api admin-api
+"${compose_cmd[@]}" pull auth-api admin-api email-worker
 if [[ "$USE_INTERNAL_DEPS" == "true" ]]; then
-  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api
+  "${compose_cmd[@]}" up -d --remove-orphans auth-api admin-api email-worker prometheus grafana alertmanager
 else
-  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api
+  "${compose_cmd[@]}" up -d --no-deps --remove-orphans auth-api admin-api email-worker prometheus grafana alertmanager
 fi
 
 if healthcheck; then

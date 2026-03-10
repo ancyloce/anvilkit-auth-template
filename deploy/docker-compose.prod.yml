@@ -108,6 +108,85 @@ services:
     networks:
       - internal
 
+  email-worker:
+    image: ghcr.io/${IMAGE_OWNER}/anvilkit-auth-template-email-worker:${IMAGE_TAG}
+    container_name: anvilkit-email-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      pg:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8082:8082"
+    mem_limit: 512m
+    networks:
+      - internal
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: anvilkit-prometheus
+    restart: unless-stopped
+    depends_on:
+      - email-worker
+      - alertmanager
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts:/etc/prometheus/alerts:ro
+      - prometheusdata:/prometheus
+    mem_limit: 512m
+    networks:
+      - internal
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: anvilkit-alertmanager
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - sh /etc/alertmanager/render-alertmanager-config.sh /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./monitoring/alertmanager/render-alertmanager-config.sh:/etc/alertmanager/render-alertmanager-config.sh:ro
+      - alertmanagerdata:/alertmanager
+    mem_limit: 256m
+    networks:
+      - internal
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    container_name: anvilkit-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    mem_limit: 512m
+    networks:
+      - internal
+
 networks:
   internal:
     driver: bridge
@@ -115,3 +194,6 @@ networks:
 volumes:
   pgdata:
   redisdata:
+  prometheusdata:
+  alertmanagerdata:
+  grafanadata:

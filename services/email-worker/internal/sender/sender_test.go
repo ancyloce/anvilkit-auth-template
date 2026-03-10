@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	commonemail "anvilkit-auth-template/modules/common-go/pkg/email"
+
 	"github.com/google/uuid"
 )
 

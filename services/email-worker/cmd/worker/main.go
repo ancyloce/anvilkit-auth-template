@@ -15,9 +15,11 @@ import (
 	"anvilkit-auth-template/modules/common-go/pkg/queue"
 	"anvilkit-auth-template/services/email-worker/internal/config"
 	"anvilkit-auth-template/services/email-worker/internal/consumer"
+	"anvilkit-auth-template/services/email-worker/internal/monitoring"
 	"anvilkit-auth-template/services/email-worker/internal/sender"
 	"anvilkit-auth-template/services/email-worker/internal/store"
 	"anvilkit-auth-template/services/email-worker/internal/webhook"
+
 	"golang.org/x/sync/errgroup"
 )
 
@@ -51,9 +53,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rdb.Close()
+	defer func() {
+		if err := rdb.Close(); err != nil {
+			log.Printf("email-worker: close redis client: %v", err)
+		}
+	}()
 
 	q, err := queue.New(rdb)
+	if err != nil {
+		log.Fatal(err)
+	}
+	metrics, err := monitoring.NewMetrics()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -66,15 +76,27 @@ func main() {
 		Sender:    sender.New(cfg.SMTPConfig()),
 		Store:     dataStore,
 		Analytics: analyticsClient,
+		Metrics:   metrics,
 	}
 
-	webhookHandler, err := webhook.NewHandler(webhook.Server{Store: dataStore, Secret: cfg.WebhookSecret, Analytics: analyticsClient})
+	webhookHandler, err := webhook.NewHandler(webhook.Server{
+		Store:     dataStore,
+		Secret:    cfg.WebhookSecret,
+		Analytics: analyticsClient,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	webhookServer := &http.Server{
 		Addr:              cfg.WebhookAddr,
 		Handler:           webhookHandler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+	}
+	metricsServer := &http.Server{
+		Addr:              cfg.MetricsAddr,
+		Handler:           metrics.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -95,8 +117,31 @@ func main() {
 		return webhookServer.Shutdown(shutdownCtx)
 	})
 	g.Go(func() error {
+		log.Printf("email-worker metrics server started: addr=%s", cfg.MetricsAddr)
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		return nil
+	})
+	g.Go(func() error {
+		<-gctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return metricsServer.Shutdown(shutdownCtx)
+	})
+	g.Go(func() error {
 		log.Printf("email-worker consumer started: queue=%s redis=%s", cfg.QueueName, cfg.RedisAddr)
 		return worker.Run(gctx)
+	})
+	g.Go(func() error {
+		collector := &monitoring.QueueBacklogCollector{
+			Queue:        q,
+			QueueName:    cfg.QueueName,
+			PollInterval: cfg.QueuePollInterval,
+			Metrics:      metrics,
+			Logger:       log.Default(),
+		}
+		return collector.Run(gctx)
 	})
 
 	if err := g.Wait(); err != nil {

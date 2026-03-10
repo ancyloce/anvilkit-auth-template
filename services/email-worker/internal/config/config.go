@@ -17,7 +17,9 @@ const (
 	defaultRedisAddr       = "localhost:6379"
 	defaultQueueName       = "email:send"
 	defaultQueueTimeoutSec = 5
+	defaultQueuePollSec    = 15
 	defaultWebhookAddr     = ":8082"
+	defaultMetricsAddr     = ":9090"
 	defaultSMTPHost        = "localhost"
 	defaultSMTPPort        = 1025
 	defaultSMTPFromEmail   = "noreply@example.com"
@@ -25,19 +27,21 @@ const (
 )
 
 type Config struct {
-	DBDSN           string
-	RedisAddr       string
-	QueueName       string
-	QueuePopTimeout time.Duration
-	WebhookAddr     string
-	WebhookSecret   string
-	SMTPHost        string
-	SMTPPort        int
-	SMTPUsername    string
-	SMTPPassword    string
-	SMTPFromEmail   string
-	SMTPFromName    string
-	Analytics       analytics.Config
+	DBDSN             string
+	RedisAddr         string
+	QueueName         string
+	QueuePopTimeout   time.Duration
+	QueuePollInterval time.Duration
+	WebhookAddr       string
+	MetricsAddr       string
+	WebhookSecret     string
+	SMTPHost          string
+	SMTPPort          int
+	SMTPUsername      string
+	SMTPPassword      string
+	SMTPFromEmail     string
+	SMTPFromName      string
+	Analytics         analytics.Config
 }
 
 func LoadFromEnv() (Config, error) {
@@ -45,20 +49,26 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	queuePollSec, err := getPositiveIntFromEnv("EMAIL_QUEUE_BACKLOG_POLL_SEC", defaultQueuePollSec)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
-		DBDSN:           getStringFromEnv("DB_DSN", defaultDBDSN),
-		RedisAddr:       getStringFromEnv("REDIS_ADDR", defaultRedisAddr),
-		QueueName:       getStringFromEnv("EMAIL_QUEUE_NAME", defaultQueueName),
-		QueuePopTimeout: time.Duration(queueTimeoutSec) * time.Second,
-		WebhookAddr:     getStringFromEnv("EMAIL_WEBHOOK_ADDR", defaultWebhookAddr),
-		WebhookSecret:   strings.TrimSpace(os.Getenv("EMAIL_WEBHOOK_SECRET")),
-		SMTPHost:        getStringFromEnv("SMTP_HOST", defaultSMTPHost),
-		SMTPPort:        getIntFromEnv("SMTP_PORT", defaultSMTPPort),
-		SMTPUsername:    getStringFromEnv("SMTP_USERNAME", ""),
-		SMTPPassword:    os.Getenv("SMTP_PASSWORD"),
-		SMTPFromEmail:   getStringFromEnv("SMTP_FROM_EMAIL", defaultSMTPFromEmail),
-		SMTPFromName:    getStringFromEnv("SMTP_FROM_NAME", defaultSMTPFromName),
+		DBDSN:             getStringFromEnv("DB_DSN", defaultDBDSN),
+		RedisAddr:         getStringFromEnv("REDIS_ADDR", defaultRedisAddr),
+		QueueName:         getStringFromEnv("EMAIL_QUEUE_NAME", defaultQueueName),
+		QueuePopTimeout:   time.Duration(queueTimeoutSec) * time.Second,
+		QueuePollInterval: time.Duration(queuePollSec) * time.Second,
+		WebhookAddr:       getStringFromEnv("EMAIL_WEBHOOK_ADDR", defaultWebhookAddr),
+		MetricsAddr:       getStringFromEnv("EMAIL_METRICS_ADDR", defaultMetricsAddr),
+		WebhookSecret:     strings.TrimSpace(os.Getenv("EMAIL_WEBHOOK_SECRET")),
+		SMTPHost:          getStringFromEnv("SMTP_HOST", defaultSMTPHost),
+		SMTPPort:          getIntFromEnv("SMTP_PORT", defaultSMTPPort),
+		SMTPUsername:      getStringFromEnv("SMTP_USERNAME", ""),
+		SMTPPassword:      os.Getenv("SMTP_PASSWORD"),
+		SMTPFromEmail:     getStringFromEnv("SMTP_FROM_EMAIL", defaultSMTPFromEmail),
+		SMTPFromName:      getStringFromEnv("SMTP_FROM_NAME", defaultSMTPFromName),
 	}
 	cfg.Analytics, err = analytics.LoadConfigFromEnv()
 	if err != nil {
@@ -76,6 +86,9 @@ func LoadFromEnv() (Config, error) {
 	}
 	if strings.TrimSpace(cfg.WebhookAddr) == "" {
 		return Config{}, fmt.Errorf("EMAIL_WEBHOOK_ADDR cannot be empty")
+	}
+	if strings.TrimSpace(cfg.MetricsAddr) == "" {
+		return Config{}, fmt.Errorf("EMAIL_METRICS_ADDR cannot be empty")
 	}
 	if cfg.WebhookSecret == "" {
 		return Config{}, fmt.Errorf("EMAIL_WEBHOOK_SECRET cannot be empty")

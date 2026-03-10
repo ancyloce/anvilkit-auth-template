@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -11,8 +14,10 @@ import (
 
 	"anvilkit-auth-template/modules/common-go/pkg/analytics"
 	commonqueue "anvilkit-auth-template/modules/common-go/pkg/queue"
+	"anvilkit-auth-template/services/email-worker/internal/monitoring"
 	"anvilkit-auth-template/services/email-worker/internal/sender"
 	workerstore "anvilkit-auth-template/services/email-worker/internal/store"
+
 	redismock "github.com/go-redis/redismock/v9"
 )
 
@@ -184,6 +189,32 @@ func (f *fakeAnalytics) Track(_ context.Context, event analytics.Event) error {
 	return nil
 }
 
+func closeBody(t *testing.T, body io.Closer) {
+	t.Helper()
+	if err := body.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func metricsBody(t *testing.T, metrics *monitoring.Metrics) string {
+	t.Helper()
+
+	server := httptest.NewServer(metrics.Handler())
+	defer server.Close()
+
+	resp, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer closeBody(t, resp.Body)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	return string(body)
+}
+
 func TestRun_DefaultTimeoutAndSuccessPath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -337,6 +368,103 @@ func TestRun_SenderFailureMarksFailed(t *testing.T) {
 	}
 	if len(st.sent) != 0 {
 		t.Fatalf("sent records=%d want=0", len(st.sent))
+	}
+}
+
+func TestRun_SendSuccessRecordsMetrics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	metrics, err := monitoring.NewMetrics()
+	if err != nil {
+		t.Fatalf("NewMetrics() error = %v", err)
+	}
+
+	q := &fakeQueue{
+		resps: []queueResp{{
+			ok: true,
+			job: EmailJob{
+				RecordID: "rec-metrics-success",
+				To:       "user@example.com",
+				Subject:  "subject",
+				HTMLBody: "<p>hello</p>",
+				TextBody: "hello",
+			},
+		}},
+	}
+	s := &fakeSender{resps: []senderResp{{externalID: "esp-metrics-success"}}}
+	st := &fakeStore{onMarkSent: cancel}
+
+	c := &Consumer{
+		Queue:     q,
+		QueueName: "email:send",
+		Timeout:   time.Second,
+		Sender:    s,
+		Store:     st,
+		Metrics:   metrics,
+	}
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	body := metricsBody(t, metrics)
+	if !strings.Contains(body, `email_worker_send_attempts_total{result="success"} 1`) {
+		t.Fatalf("metrics body missing success counter:\n%s", body)
+	}
+	if !strings.Contains(body, `email_worker_send_latency_seconds_count{result="success"} 1`) {
+		t.Fatalf("metrics body missing success latency histogram count:\n%s", body)
+	}
+	if strings.Contains(body, `email_worker_send_attempts_total{result="failure"} 1`) {
+		t.Fatalf("metrics body unexpectedly recorded a failure attempt:\n%s", body)
+	}
+}
+
+func TestRun_SendFailureRecordsMetrics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	metrics, err := monitoring.NewMetrics()
+	if err != nil {
+		t.Fatalf("NewMetrics() error = %v", err)
+	}
+
+	q := &fakeQueue{
+		resps: []queueResp{{
+			ok: true,
+			job: EmailJob{
+				RecordID: "rec-metrics-failure",
+				To:       "user@example.com",
+				HTMLBody: "<p>hello</p>",
+				TextBody: "hello",
+			},
+		}},
+	}
+	s := &fakeSender{resps: []senderResp{{err: errors.New("smtp failed")}}}
+	st := &fakeStore{onMarkFailed: cancel}
+
+	c := &Consumer{
+		Queue:     q,
+		QueueName: "email:send",
+		Timeout:   time.Second,
+		Sender:    s,
+		Store:     st,
+		Metrics:   metrics,
+	}
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	body := metricsBody(t, metrics)
+	if !strings.Contains(body, `email_worker_send_attempts_total{result="failure"} 1`) {
+		t.Fatalf("metrics body missing failure counter:\n%s", body)
+	}
+	if !strings.Contains(body, `email_worker_send_latency_seconds_count{result="failure"} 1`) {
+		t.Fatalf("metrics body missing failure latency histogram count:\n%s", body)
+	}
+	if strings.Contains(body, `email_worker_send_attempts_total{result="success"} 1`) {
+		t.Fatalf("metrics body unexpectedly recorded a success attempt:\n%s", body)
 	}
 }
 
