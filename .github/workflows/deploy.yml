@@ -322,6 +322,7 @@ jobs:
           EMAIL_QUEUE_NAME: ${{ secrets.EMAIL_QUEUE_NAME }}
           EMAIL_QUEUE_POP_TIMEOUT_SEC: ${{ secrets.EMAIL_QUEUE_POP_TIMEOUT_SEC }}
           EMAIL_QUEUE_BACKLOG_POLL_SEC: ${{ secrets.EMAIL_QUEUE_BACKLOG_POLL_SEC }}
+          EMAIL_METRICS_ADDR: ${{ secrets.EMAIL_METRICS_ADDR }}
           EMAIL_WEBHOOK_ADDR: ${{ secrets.EMAIL_WEBHOOK_ADDR }}
           EMAIL_WEBHOOK_SECRET: ${{ secrets.EMAIL_WEBHOOK_SECRET }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -376,6 +377,7 @@ jobs:
           email_queue_name="${EMAIL_QUEUE_NAME:-email:send}"
           email_queue_pop_timeout="${EMAIL_QUEUE_POP_TIMEOUT_SEC:-5}"
           email_queue_backlog_poll="${EMAIL_QUEUE_BACKLOG_POLL_SEC:-15}"
+          email_metrics_addr="${EMAIL_METRICS_ADDR:-:9090}"
           email_webhook_addr="${EMAIL_WEBHOOK_ADDR:-:8082}"
           smtp_port="${SMTP_PORT:-25}"
           smtp_from_email="${SMTP_FROM_EMAIL:-noreply@example.com}"
@@ -393,6 +395,7 @@ jobs:
           EMAIL_QUEUE_NAME=${email_queue_name}
           EMAIL_QUEUE_POP_TIMEOUT_SEC=${email_queue_pop_timeout}
           EMAIL_QUEUE_BACKLOG_POLL_SEC=${email_queue_backlog_poll}
+          EMAIL_METRICS_ADDR=${email_metrics_addr}
           EMAIL_WEBHOOK_ADDR=${email_webhook_addr}
           EMAIL_WEBHOOK_SECRET=${EMAIL_WEBHOOK_SECRET}
           SMTP_HOST=${SMTP_HOST}
@@ -518,6 +521,7 @@ jobs:
           EMAIL_QUEUE_NAME: ${{ secrets.EMAIL_QUEUE_NAME }}
           EMAIL_QUEUE_POP_TIMEOUT_SEC: ${{ secrets.EMAIL_QUEUE_POP_TIMEOUT_SEC }}
           EMAIL_QUEUE_BACKLOG_POLL_SEC: ${{ secrets.EMAIL_QUEUE_BACKLOG_POLL_SEC }}
+          EMAIL_METRICS_ADDR: ${{ secrets.EMAIL_METRICS_ADDR }}
           EMAIL_WEBHOOK_ADDR: ${{ secrets.EMAIL_WEBHOOK_ADDR }}
           EMAIL_WEBHOOK_SECRET: ${{ secrets.EMAIL_WEBHOOK_SECRET }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -560,6 +564,7 @@ jobs:
           email_queue_name_escaped=$(printf '%q' "${EMAIL_QUEUE_NAME:-}")
           email_queue_pop_timeout_escaped=$(printf '%q' "${EMAIL_QUEUE_POP_TIMEOUT_SEC:-}")
           email_queue_backlog_poll_escaped=$(printf '%q' "${EMAIL_QUEUE_BACKLOG_POLL_SEC:-}")
+          email_metrics_addr_escaped=$(printf '%q' "${EMAIL_METRICS_ADDR:-}")
           email_webhook_addr_escaped=$(printf '%q' "${EMAIL_WEBHOOK_ADDR:-}")
           email_webhook_secret_escaped=$(printf '%q' "$EMAIL_WEBHOOK_SECRET")
           smtp_host_escaped=$(printf '%q' "$SMTP_HOST")
@@ -588,7 +593,8 @@ jobs:
              GHCR_USERNAME=$ghcr_username_escaped GHCR_TOKEN=$ghcr_token_escaped \
              DB_DSN=$db_dsn_escaped REDIS_ADDR=$redis_addr_escaped \
              EMAIL_QUEUE_NAME=$email_queue_name_escaped EMAIL_QUEUE_POP_TIMEOUT_SEC=$email_queue_pop_timeout_escaped \
-             EMAIL_QUEUE_BACKLOG_POLL_SEC=$email_queue_backlog_poll_escaped EMAIL_WEBHOOK_ADDR=$email_webhook_addr_escaped \
+             EMAIL_QUEUE_BACKLOG_POLL_SEC=$email_queue_backlog_poll_escaped EMAIL_METRICS_ADDR=$email_metrics_addr_escaped \
+             EMAIL_WEBHOOK_ADDR=$email_webhook_addr_escaped \
              EMAIL_WEBHOOK_SECRET=$email_webhook_secret_escaped SMTP_HOST=$smtp_host_escaped \
              SMTP_PORT=$smtp_port_escaped SMTP_USERNAME=$smtp_username_escaped \
              SMTP_PASSWORD=$smtp_password_escaped SMTP_FROM_EMAIL=$smtp_from_email_escaped \
