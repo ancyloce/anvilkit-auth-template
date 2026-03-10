@@ -208,5 +208,5 @@ Useful local validation commands:
 ```bash
 go test ./services/email-worker/... -count=1
 docker run --rm --entrypoint promtool -v "$PWD/deploy/monitoring/prometheus/alerts:/rules:ro" prom/prometheus:v3.5.0 check rules /rules/email-worker.rules.yml
-docker run --rm --entrypoint sh -v "$PWD/deploy/monitoring/alertmanager:/config:ro" -e ALERT_EMAIL_TO=alerts@example.com -e ALERT_EMAIL_FROM=alerts@example.com -e ALERT_SMTP_SMARTHOST=mailpit:1025 -e ALERT_SMTP_AUTH_USERNAME= -e ALERT_SMTP_AUTH_PASSWORD='p@ss&word|with\chars' -e ALERT_SMTP_REQUIRE_TLS=false prom/alertmanager:v0.28.1 -ec 'sh /config/render-alertmanager-config.sh /tmp/alertmanager.yml && alertmanager --config.file=/tmp/alertmanager.yml --log.level=error --cluster.listen-address= >/tmp/alertmanager.log 2>&1 & pid=$!; sleep 2; kill $pid; wait $pid || test $? -eq 143'
+docker run --rm --entrypoint sh -v "$PWD/deploy/monitoring/alertmanager:/config:ro" -e ALERT_EMAIL_TO=alerts@example.com -e ALERT_EMAIL_FROM=alerts@example.com -e ALERT_SMTP_SMARTHOST=mailpit:1025 -e ALERT_SMTP_AUTH_USERNAME= -e ALERT_SMTP_AUTH_PASSWORD="p@ss'word&with|chars\\andmore" -e ALERT_SMTP_REQUIRE_TLS=false prom/alertmanager:v0.28.1 -ec 'sh /config/render-alertmanager-config.sh /tmp/alertmanager.yml && amtool check-config /tmp/alertmanager.yml'
 ```

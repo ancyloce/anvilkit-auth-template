@@ -4,7 +4,8 @@ set -eu
 output_path="${1:-/tmp/alertmanager.yml}"
 
 yaml_squote() {
-  printf "%s" "$1" | sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/"
+  escaped="$(printf "%s" "$1" | sed "s/'/''/g")"
+  printf "'%s'" "$escaped"
 }
 
 normalize_bool() {
