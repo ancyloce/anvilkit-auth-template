@@ -577,7 +577,10 @@ func buildMagicLinkSuccessURL(publicBaseURL string) string {
 func setMagicLinkStateCookie(c *gin.Context, state string, expiresAt time.Time) {
 	maxAge := int(time.Until(expiresAt).Seconds())
 	if maxAge <= 0 {
-		maxAge = int(defaultVerificationTTL.Seconds())
+		// If the computed expiry is already in the past, do not extend the cookie
+		// beyond the verification window. Use a minimal max-age so it expires
+		// immediately (or almost immediately).
+		maxAge = 1
 	}
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(magicLinkStateCookieName, state, maxAge, "/", "", isSecureRequest(c), true)
