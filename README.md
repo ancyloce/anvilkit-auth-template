@@ -1,9 +1,10 @@
 # anvilkit-auth-template
 
-Production-ready starter template for a multi-tenant auth platform built with two independent microservices:
+Production-ready starter template for a multi-tenant auth platform built with three independent microservices:
 
 - `auth-api` — user authentication and token lifecycle (port 8080)
 - `admin-api` — tenant-scoped RBAC admin APIs (port 8081)
+- `email-worker` — async email delivery with bounce handling (port 8082 webhook, 9090 metrics)
 
 **Stack:** Go 1.22, Gin, PostgreSQL 16, Redis 7
 
@@ -23,9 +24,52 @@ make smoke   # verify everything is working
 - Unified JSON envelope response with stable error codes and request ID
 - Middleware-driven centralized error handling
 - Redis fixed-window rate limiting on auth endpoints
+- Dual email verification: 6-digit OTP + magic link with cross-device detection
+- Async email delivery via Redis queue; SMTP with soft/hard bounce classification
+- Email blacklist with automatic hard-bounce suppression
+- Prometheus metrics + webhook server for ESP delivery events
 - Docker Compose one-command bootstrap; production compose with auto-rollback CI/CD
 
-See `docs/` for architecture and API details.
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Client / Browser                             │
+└───────────┬─────────────────────────────────┬───────────────────────┘
+            │ :8080                           │ :8081
+            ▼                                 ▼
+┌───────────────────────┐         ┌───────────────────────┐
+│       auth-api        │         │       admin-api        │
+│  POST /auth/register  │         │  GET  /tenants/:id/    │
+│  POST /auth/login     │         │       members          │
+│  POST /auth/refresh   │         │  POST /tenants/:id/    │
+│  POST /auth/logout    │         │       members          │
+│  GET  /auth/verify-   │         │  PATCH/DELETE members  │
+│       magic-link      │         │  POST .../roles/:role  │
+│  POST /bootstrap      │         │                        │
+└──────┬────────────────┘         └──────────┬─────────────┘
+       │                                     │
+       │ RPUSH email:send                    │ Casbin RBAC
+       │                                     │ (pg_adapter)
+       ▼                                     │
+┌──────────────┐   BLPOP    ┌────────────────▼──────────────┐
+│    Redis     │◄───────────│       email-worker             │
+│  email:send  │            │  consumer → SMTP send          │
+│  rate limits │            │  bounce classify (4xx/5xx)     │
+└──────────────┘            │  webhook server  :8082         │
+                            │  metrics server  :9090         │
+                            └────────────┬──────────────────┘
+                                         │ pgx
+       ┌─────────────────────────────────┘
+       ▼
+┌──────────────────────────────────────────────────────────────┐
+│                        PostgreSQL                            │
+│  users  tenants  tenant_users  user_roles                    │
+│  user_password_credentials  refresh_sessions                 │
+│  email_verifications  email_jobs  email_records              │
+│  email_status_history  email_blacklist  casbin_rule          │
+└──────────────────────────────────────────────────────────────┘
+```
 
 ## Bootstrap API
 
@@ -44,6 +88,8 @@ Request body:
 Response `data` returns `tenant` and `owner_user` in unified Envelope format.
 
 ## Configuration
+
+### auth-api
 
 `auth-api` loads config from environment variables on startup. Missing required variables cause an immediate exit (no sensitive values are logged).
 
@@ -67,6 +113,27 @@ Response `data` returns `tenant` and `owner_user` in unified Envelope format.
 | `CORS_ALLOW_ORIGINS` | no | `http://localhost:3000` | Allowed CORS origins |
 | `CORS_ALLOW_CREDENTIALS` | no | `true` | CORS credentials flag (required for browser cookie-based magic-link same-device verification in SPA flows) |
 | `RBAC_DIR` | no | `internal/rbac` | Casbin config directory (admin-api only) |
+
+### email-worker
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DB_DSN` | no | `postgres://postgres:postgres@localhost:5432/auth?sslmode=disable` | PostgreSQL DSN |
+| `REDIS_ADDR` | no | `localhost:6379` | Redis address |
+| `SMTP_HOST` | yes | — | SMTP server hostname |
+| `SMTP_PORT` | yes | — | SMTP server port |
+| `SMTP_USERNAME` | yes | — | SMTP auth username |
+| `SMTP_PASSWORD` | yes | — | SMTP auth password |
+| `SMTP_FROM_EMAIL` | yes | — | Sender email address |
+| `SMTP_FROM_NAME` | no | — | Sender display name |
+| `EMAIL_QUEUE_NAME` | no | `email:send` | Redis queue name |
+| `EMAIL_QUEUE_POP_TIMEOUT_SEC` | no | `5` | BLPOP blocking timeout (seconds) |
+| `EMAIL_QUEUE_BACKLOG_POLL_SEC` | no | `15` | Queue length metrics poll interval (seconds) |
+| `EMAIL_WEBHOOK_ADDR` | no | `:8082` | Webhook server listen address |
+| `EMAIL_METRICS_ADDR` | no | `:9090` | Prometheus metrics listen address |
+| `EMAIL_WEBHOOK_SECRET` | yes | — | HMAC secret for webhook signature validation |
+| `ANALYTICS_ENABLED` | no | `false` | Enable Mixpanel analytics |
+| `MIXPANEL_TOKEN` | when analytics enabled | — | Mixpanel project token |
 
 ### Cross-Origin SPA Note (Magic Link Same-Device)
 
@@ -117,6 +184,17 @@ Migrations are applied from both service directories in lexical order:
 - `services/auth-api/migrations/*.sql`
 - `services/admin-api/migrations/*.sql`
 
+| File | Description |
+|---|---|
+| `001_init.sql` | Initial schema: tenants, users, tenant_users, user_roles, refresh_tokens |
+| `002_authn_core.sql` | Auth hardening: user_password_credentials, refresh_sessions, nullable email/password |
+| `003_multitenant.sql` | Tenant hardening: slug, status, updated_at; tenant_users role constraint |
+| `004_email_service.sql` | Email tables: email_verifications, email_jobs, email_records, email_status_history |
+| `005_email_verifications_token_hash_scope.sql` | Scoped token_hash uniqueness: magic_link unique, OTP composite index |
+| `006_email_blacklist.sql` | email_blacklist table for bounce suppression |
+| `007_email_blacklist_normalization.sql` | Email blacklist normalization improvements |
+| `admin-api/001_casbin_rule.sql` | casbin_rule table for RBAC policies |
+
 ### Multi-tenant tables
 
 - `tenants`: tenant metadata (`id`, `name`, optional `slug`, `status`, timestamps).
@@ -129,18 +207,19 @@ Migrations are applied from both service directories in lexical order:
 - `email_jobs`: reusable email job/batch envelope with `job_type`, `status`, optional JSON `payload`, and timestamps.
 - `email_records`: per-email send record linked to optional `email_jobs` / `users` rows, including ESP `external_id` and delivery `status`.
 - `email_status_history`: immutable status timeline for each email record (`queued`, `sent`, `delivered`, `opened`, `clicked`, `bounced`, `failed`) with event metadata and timestamped inserts.
+- `email_blacklist`: suppression list populated on hard bounces (5xx SMTP); checked before each send.
 - `users.email_verified_at`: nullable verification timestamp for user email confirmation state.
 - `users.status`: default is `0` (`pending`) for newly created users.
 
 ## Deployment (Docker Compose + GitHub Actions)
 
-`.github/workflows/deploy.yml` builds and pushes images to GHCR, then deploys to a Linux server via SSH.
+`.github/workflows/deploy.yml` builds and pushes images to GHCR, then deploys to a Linux server via SSH. Three containers are deployed: `auth-api`, `admin-api`, and `email-worker`.
 
 ### 1. Server setup
 
 1. Install Docker with the Compose plugin (`docker compose version` should work).
 2. Create a deploy directory, e.g. `/opt/anvilkit-auth-template`.
-3. Place a `.env` file there with at minimum: `DB_DSN`, `REDIS_ADDR`, `JWT_ISSUER`, `JWT_AUDIENCE`, `JWT_SECRET`, `CORS_ALLOW_ORIGINS`.
+3. Place a `.env` file there with at minimum: `DB_DSN`, `REDIS_ADDR`, `JWT_ISSUER`, `JWT_AUDIENCE`, `JWT_SECRET`, `CORS_ALLOW_ORIGINS`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `EMAIL_WEBHOOK_SECRET`.
 4. If using external DB/Redis, point `DB_DSN`/`REDIS_ADDR` to those addresses and set `USE_INTERNAL_DEPS=false` in GitHub Environment Variables.
 5. If images are private, run `docker login ghcr.io` on the server first.
 
@@ -190,11 +269,15 @@ Deploy steps:
 docker compose -f deploy/docker-compose.prod.yml --env-file .env ps
 docker compose -f deploy/docker-compose.prod.yml --env-file .env logs -f auth-api
 docker compose -f deploy/docker-compose.prod.yml --env-file .env logs -f admin-api
+docker compose -f deploy/docker-compose.prod.yml --env-file .env logs -f email-worker
 curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS http://127.0.0.1:8081/healthz
+# Prometheus metrics
+curl -fsS http://127.0.0.1:9090/metrics
 ```
 
 **Common issues:**
 - Image pull 401/403 — log in to GHCR on the server or make images public
 - Migration failure — check `DB_DSN` connectivity and permissions in `.env`
 - Health check failure — check service logs; confirm DB, Redis, and all required JWT env vars are set
+- Email not sending — check `SMTP_*` vars and `email-worker` logs; verify `EMAIL_WEBHOOK_SECRET` is set
