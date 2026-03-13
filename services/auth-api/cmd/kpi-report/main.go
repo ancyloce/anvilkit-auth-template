@@ -383,7 +383,9 @@ func loadMixpanelSummary(path string) (*mixpanelSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	summary := &mixpanelSummary{
 		Path:          path,
