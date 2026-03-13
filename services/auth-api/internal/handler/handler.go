@@ -414,7 +414,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 				c,
 				http.StatusGone,
 				"Magic link expired",
-				"This verification link has expired. Request a new verification email after 90 seconds and enter the OTP manually if needed.",
+				magicLinkExpiredMessage(),
 			)
 			return nil
 		}
@@ -440,7 +440,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 			c,
 			http.StatusOK,
 			"Enter OTP to verify",
-			"This link was opened from a different browser or device. Please return to the original device and manually enter the 6-digit OTP. If you still need another email, wait 90 seconds before requesting a resend.",
+			crossDeviceOTPMessage(),
 		)
 		return nil
 	}
@@ -461,7 +461,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 				c,
 				http.StatusGone,
 				"Magic link expired",
-				"This verification link has expired. Request a new verification email after 90 seconds and enter the OTP manually if needed.",
+				magicLinkExpiredMessage(),
 			)
 			return nil
 		}
@@ -666,6 +666,20 @@ func formatResendIn(delay time.Duration) string {
 		return "1 second"
 	}
 	return fmt.Sprintf("%d seconds", seconds)
+}
+
+func magicLinkExpiredMessage() string {
+	return fmt.Sprintf(
+		"This verification link has expired. Request a new verification email after %s and enter the OTP manually if needed.",
+		formatResendIn(resendVerificationWindow),
+	)
+}
+
+func crossDeviceOTPMessage() string {
+	return fmt.Sprintf(
+		"This link was opened from a different browser or device. Please return to the original device and manually enter the 6-digit OTP. If you still need another email, wait %s before requesting a resend.",
+		formatResendIn(resendVerificationWindow),
+	)
 }
 
 func (h *Handler) verificationTTL() time.Duration {

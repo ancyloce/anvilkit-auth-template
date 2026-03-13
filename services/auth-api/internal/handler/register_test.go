@@ -652,6 +652,9 @@ func TestVerifyMagicLinkCrossDeviceShowsOTPFallback(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "manually enter the 6-digit OTP") {
 		t.Fatalf("fallback page body missing OTP guidance: %s", w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), formatResendIn(resendVerificationWindow)) {
+		t.Fatalf("fallback page body missing resend cooldown guidance: %s", w.Body.String())
+	}
 
 	var status int16
 	var emailVerifiedAt *time.Time
@@ -730,6 +733,9 @@ where ev.user_id = u.id
 	}
 	if !strings.Contains(strings.ToLower(w.Body.String()), "expired") {
 		t.Fatalf("error page should mention expiry: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), formatResendIn(resendVerificationWindow)) {
+		t.Fatalf("error page missing resend cooldown guidance: %s", w.Body.String())
 	}
 	var status int16
 	var emailVerifiedAt *time.Time
