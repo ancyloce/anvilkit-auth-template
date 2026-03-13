@@ -150,7 +150,14 @@ truncate table
   email_records,
   email_jobs,
   email_verifications,
-  email_blacklist
+  email_blacklist,
+  user_roles,
+  tenant_users,
+  refresh_tokens,
+  refresh_sessions,
+  user_password_credentials,
+  tenants,
+  users
 restart identity cascade`); err != nil {
 		t.Fatalf("truncate email tables: %v", err)
 	}
