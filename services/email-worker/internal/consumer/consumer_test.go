@@ -215,6 +215,10 @@ func metricsBody(t *testing.T, metrics *monitoring.Metrics) string {
 	return string(body)
 }
 
+func ptrTime(ts time.Time) *time.Time {
+	return &ts
+}
+
 func TestRun_DefaultTimeoutAndSuccessPath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -291,7 +295,12 @@ func TestRun_TracksVerificationEmailSent(t *testing.T) {
 	tracker := &fakeAnalytics{}
 	st := &fakeStore{
 		analyticsByID: map[string]*workerstore.AnalyticsRecord{
-			"rec-analytics-sent": {UserID: "user-1", Email: "user@example.com"},
+			"rec-analytics-sent": {
+				UserID:   "user-1",
+				Email:    "user@example.com",
+				QueuedAt: time.Now().Add(-3 * time.Second),
+				SentAt:   ptrTime(time.Now().Add(-2 * time.Second)),
+			},
 		},
 		onMarkSent: cancel,
 	}
@@ -317,6 +326,9 @@ func TestRun_TracksVerificationEmailSent(t *testing.T) {
 	}
 	if event.UserID != "user-1" || event.Email != "user@example.com" {
 		t.Fatalf("unexpected event identity: %+v", event)
+	}
+	if latency, ok := event.Properties["latency_from_queue_ms"].(int64); !ok || latency <= 0 {
+		t.Fatalf("latency_from_queue_ms=%v want positive int64", event.Properties["latency_from_queue_ms"])
 	}
 	if event.Timestamp.IsZero() {
 		t.Fatal("timestamp should be set")
@@ -668,6 +680,7 @@ func TestRun_RendersVerificationTemplatesWhenBodiesMissing(t *testing.T) {
 				OTP:       "123456",
 				MagicLink: "https://example.com/verify?token=t&state=s",
 				ExpiresIn: "15 minutes",
+				ResendIn:  "90 seconds",
 			},
 		}},
 	}
@@ -686,10 +699,10 @@ func TestRun_RendersVerificationTemplatesWhenBodiesMissing(t *testing.T) {
 	if req.HTMLBody == "" || req.TextBody == "" {
 		t.Fatalf("expected rendered html/text bodies, got html=%q text=%q", req.HTMLBody, req.TextBody)
 	}
-	if !containsAll(req.TextBody, "123456", "15 minutes", "https://example.com/verify?token=t&state=s") {
+	if !containsAll(req.TextBody, "123456", "15 minutes", "https://example.com/verify?token=t&state=s", "90 seconds") {
 		t.Fatalf("text body missing rendered values: %q", req.TextBody)
 	}
-	if !containsAll(req.HTMLBody, "123456", "15 minutes", "https://example.com/verify?token=t&amp;state=s") {
+	if !containsAll(req.HTMLBody, "123456", "15 minutes", "https://example.com/verify?token=t&amp;state=s", "90 seconds") {
 		t.Fatalf("html body missing rendered values: %q", req.HTMLBody)
 	}
 }

@@ -32,6 +32,7 @@ type queuedEmailJob struct {
 	OTP       string `json:"otp"`
 	MagicLink string `json:"magic_link"`
 	ExpiresIn string `json:"expires_in"`
+	ResendIn  string `json:"resend_in"`
 }
 
 func TestRegisterSuccess(t *testing.T) {
@@ -161,6 +162,9 @@ where user_id=$1`, userID).Scan(&emailRecordID, &toEmail, &template, &subject, &
 	if job.ExpiresIn != "15 minutes" {
 		t.Fatalf("job expires_in=%q want=%q", job.ExpiresIn, "15 minutes")
 	}
+	if job.ResendIn != "90 seconds" {
+		t.Fatalf("job resend_in=%q want=%q", job.ResendIn, "90 seconds")
+	}
 	if strings.TrimSpace(job.TextBody) != "" || strings.TrimSpace(job.HTMLBody) != "" {
 		t.Fatalf("expected queue payload bodies to be empty for worker-side template rendering: text=%q html=%q", job.TextBody, job.HTMLBody)
 	}
@@ -168,6 +172,53 @@ where user_id=$1`, userID).Scan(&emailRecordID, &toEmail, &template, &subject, &
 	stateCookie := findCookieByName(res, magicLinkStateCookieName)
 	if stateCookie == nil || strings.TrimSpace(stateCookie.Value) == "" {
 		t.Fatalf("expected %s cookie to be set", magicLinkStateCookieName)
+	}
+}
+
+func TestRegisterUsesConfiguredVerificationTTL(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(ginmid.RequestID(), ginmid.ErrorHandler())
+	h := newTestAuthHandler(t, db, rdb)
+	h.VerificationTTL = 7 * time.Minute
+	r.POST("/v1/auth/register", ginmid.Wrap(h.Register))
+
+	start := time.Now()
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "ttl-check@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body = %s", res.Code, http.StatusAccepted, res.Body.String())
+	}
+
+	job, err := popQueuedJob(t, rdb)
+	if err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+	if job.ExpiresIn != "7 minutes" {
+		t.Fatalf("job expires_in=%q want=%q", job.ExpiresIn, "7 minutes")
+	}
+
+	var expiresAt time.Time
+	if err := db.QueryRow(context.Background(), `
+select ev.expires_at
+from email_verifications ev
+join users u on u.id = ev.user_id
+where u.email = $1
+order by ev.created_at asc
+limit 1`, "ttl-check@example.com").Scan(&expiresAt); err != nil {
+		t.Fatalf("query email_verifications: %v", err)
+	}
+	minExpiry := start.Add(6 * time.Minute)
+	maxExpiry := time.Now().Add(8 * time.Minute)
+	if expiresAt.Before(minExpiry) || expiresAt.After(maxExpiry) {
+		t.Fatalf("expires_at=%s outside expected range [%s,%s]", expiresAt, minExpiry, maxExpiry)
 	}
 }
 

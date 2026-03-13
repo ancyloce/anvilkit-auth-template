@@ -77,6 +77,7 @@ type EmailJob struct {
 	OTP        string `json:"otp"`
 	MagicLink  string `json:"magic_link"`
 	ExpiresIn  string `json:"expires_in"`
+	ResendIn   string `json:"resend_in,omitempty"`
 	RetryCount int    `json:"retry_count,omitempty"`
 }
 
@@ -258,7 +259,13 @@ func renderVerificationEmailBody(job EmailJob) (string, string, error) {
 		OTP       string
 		MagicLink string
 		ExpiresIn string
-	}{OTP: job.OTP, MagicLink: job.MagicLink, ExpiresIn: job.ExpiresIn}
+		ResendIn  string
+	}{
+		OTP:       job.OTP,
+		MagicLink: job.MagicLink,
+		ExpiresIn: job.ExpiresIn,
+		ResendIn:  defaultResendIn(job.ResendIn),
+	}
 
 	var htmlBody bytes.Buffer
 	if err := verificationHTMLTemplate.Execute(&htmlBody, data); err != nil {
@@ -278,14 +285,25 @@ func isPayloadDecodeError(err error) bool {
 }
 
 func (c *Consumer) trackVerificationEmailSent(ctx context.Context, recordID string) {
-	c.trackRecordEvent(ctx, recordID, "verification_email_sent", nil)
+	c.trackRecordEvent(ctx, recordID, "verification_email_sent", func(record *workerstore.AnalyticsRecord) map[string]any {
+		props := map[string]any{}
+		if record != nil && record.SentAt != nil && !record.QueuedAt.IsZero() {
+			props["latency_from_queue_ms"] = maxInt64(0, record.SentAt.UTC().Sub(record.QueuedAt.UTC()).Milliseconds())
+		}
+		if len(props) == 0 {
+			return nil
+		}
+		return props
+	})
 }
 
 func (c *Consumer) trackVerificationEmailBounced(ctx context.Context, recordID, bounceType string) {
-	c.trackRecordEvent(ctx, recordID, "verification_email_bounced", map[string]any{"bounce_type": bounceType})
+	c.trackRecordEvent(ctx, recordID, "verification_email_bounced", func(_ *workerstore.AnalyticsRecord) map[string]any {
+		return map[string]any{"bounce_type": bounceType}
+	})
 }
 
-func (c *Consumer) trackRecordEvent(ctx context.Context, recordID, eventName string, props map[string]any) {
+func (c *Consumer) trackRecordEvent(ctx context.Context, recordID, eventName string, propsFn func(*workerstore.AnalyticsRecord) map[string]any) {
 	if c.Analytics == nil {
 		return
 	}
@@ -302,6 +320,10 @@ func (c *Consumer) trackRecordEvent(ctx context.Context, recordID, eventName str
 		log.Printf("email-worker analytics: skip event=%q record_id=%q missing email", eventName, recordID)
 		return
 	}
+	props := map[string]any(nil)
+	if propsFn != nil {
+		props = propsFn(record)
+	}
 	if err := c.Analytics.Track(ctx, analytics.Event{
 		Name:       eventName,
 		UserID:     record.UserID,
@@ -311,4 +333,19 @@ func (c *Consumer) trackRecordEvent(ctx context.Context, recordID, eventName str
 	}); err != nil {
 		log.Printf("email-worker analytics: track event=%q record_id=%q failed: %v", eventName, recordID, err)
 	}
+}
+
+func defaultResendIn(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value != "" {
+		return value
+	}
+	return "90 seconds"
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }

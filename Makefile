@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f deploy/docker-compose.yml
 
-.PHONY: up down migrate init smoke test
+.PHONY: up down migrate init smoke test kpi-report
 
 up:
 	$(COMPOSE) up -d --build
@@ -18,3 +18,6 @@ smoke:
 
 test:
 	go test ./... -count=1
+
+kpi-report:
+	go run ./services/auth-api/cmd/kpi-report

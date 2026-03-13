@@ -87,6 +87,9 @@ func TestBootstrapSuccessAndLogin(t *testing.T) {
 	if job.ExpiresIn != "15 minutes" {
 		t.Fatalf("job expires_in=%q want=%q", job.ExpiresIn, "15 minutes")
 	}
+	if job.ResendIn != "90 seconds" {
+		t.Fatalf("job resend_in=%q want=%q", job.ResendIn, "90 seconds")
+	}
 	if strings.TrimSpace(job.TextBody) != "" || strings.TrimSpace(job.HTMLBody) != "" {
 		t.Fatalf("expected queue payload bodies to be empty for worker-side template rendering: text=%q html=%q", job.TextBody, job.HTMLBody)
 	}

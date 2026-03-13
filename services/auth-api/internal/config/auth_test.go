@@ -50,6 +50,7 @@ func TestLoadAuthConfigFromEnvSuccess(t *testing.T) {
 	setRequiredAuthEnv(t)
 	t.Setenv("ACCESS_TTL_MIN", "20")
 	t.Setenv("REFRESH_TTL_HOURS", "240")
+	t.Setenv("VERIFICATION_TTL_MIN", "7")
 	t.Setenv("PASSWORD_MIN_LEN", "10")
 	t.Setenv("BCRYPT_COST", "13")
 	t.Setenv("LOGIN_FAIL_LIMIT", "7")
@@ -66,6 +67,9 @@ func TestLoadAuthConfigFromEnvSuccess(t *testing.T) {
 	if cfg.RefreshTTL != 240*time.Hour {
 		t.Fatalf("RefreshTTL = %v, want %v", cfg.RefreshTTL, 240*time.Hour)
 	}
+	if cfg.VerificationTTL != 7*time.Minute {
+		t.Fatalf("VerificationTTL = %v, want %v", cfg.VerificationTTL, 7*time.Minute)
+	}
 	if cfg.PasswordMinLen != 10 {
 		t.Fatalf("PasswordMinLen = %d, want 10", cfg.PasswordMinLen)
 	}
@@ -80,6 +84,19 @@ func TestLoadAuthConfigFromEnvSuccess(t *testing.T) {
 	}
 	if cfg.PublicBaseURL != "https://auth.example.com" {
 		t.Fatalf("PublicBaseURL = %q, want %q", cfg.PublicBaseURL, "https://auth.example.com")
+	}
+}
+
+func TestLoadAuthConfigFromEnvInvalidVerificationTTL(t *testing.T) {
+	setRequiredAuthEnv(t)
+	t.Setenv("VERIFICATION_TTL_MIN", "-1")
+
+	_, err := LoadAuthConfigFromEnv()
+	if err == nil {
+		t.Fatal("LoadAuthConfigFromEnv() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "VERIFICATION_TTL_MIN") {
+		t.Fatalf("LoadAuthConfigFromEnv() error = %q, want mention VERIFICATION_TTL_MIN", err)
 	}
 }
 
