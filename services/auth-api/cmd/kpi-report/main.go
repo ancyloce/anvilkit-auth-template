@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/csv"
@@ -352,10 +352,11 @@ func queryOptionalFloat64(ctx context.Context, db *pgxpool.Pool, query string) (
 }
 
 func loadMixpanelSummary(path string) (*mixpanelSummary, error) {
-	raw, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer file.Close()
 
 	summary := &mixpanelSummary{
 		Path:          path,
@@ -382,23 +383,18 @@ func loadMixpanelSummary(path string) (*mixpanelSummary, error) {
 		}
 	}
 
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return summary, nil
-	}
-
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".csv":
-		reader := csv.NewReader(bytes.NewReader(raw))
-		records, err := reader.ReadAll()
+		reader := csv.NewReader(file)
+		header, err := reader.Read()
 		if err != nil {
+			if err == io.EOF {
+				return summary, nil
+			}
 			return nil, err
 		}
-		if len(records) == 0 {
-			return summary, nil
-		}
 		headerIndex := map[string]int{}
-		for idx, name := range records[0] {
+		for idx, name := range header {
 			headerIndex[strings.ToLower(strings.TrimSpace(name))] = idx
 		}
 		eventIdx := -1
@@ -411,7 +407,14 @@ func loadMixpanelSummary(path string) (*mixpanelSummary, error) {
 		if eventIdx < 0 {
 			return nil, fmt.Errorf("csv export is missing an event column")
 		}
-		for _, row := range records[1:] {
+		for {
+			row, err := reader.Read()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return nil, err
+			}
 			if eventIdx < len(row) {
 				recordEvent(row[eventIdx])
 			}
@@ -420,18 +423,41 @@ func loadMixpanelSummary(path string) (*mixpanelSummary, error) {
 	default:
 	}
 
-	if trimmed[0] == '[' {
-		var rows []map[string]any
-		if err := json.Unmarshal(trimmed, &rows); err != nil {
+	reader := bufio.NewReader(file)
+	firstByte, err := firstNonSpaceByte(reader)
+	if err != nil {
+		if err == io.EOF {
+			return summary, nil
+		}
+		return nil, err
+	}
+	if err := reader.UnreadByte(); err != nil {
+		return nil, err
+	}
+
+	decoder := json.NewDecoder(reader)
+	if firstByte == '[' {
+		token, err := decoder.Token()
+		if err != nil {
 			return nil, err
 		}
-		for _, row := range rows {
+		delim, ok := token.(json.Delim)
+		if !ok || delim != '[' {
+			return nil, fmt.Errorf("json export is not an array")
+		}
+		for decoder.More() {
+			var row map[string]any
+			if err := decoder.Decode(&row); err != nil {
+				return nil, err
+			}
 			recordEvent(extractEventName(row))
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
 		}
 		return summary, nil
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(raw))
 	for {
 		var row map[string]any
 		if err := decoder.Decode(&row); err != nil {
@@ -443,6 +469,21 @@ func loadMixpanelSummary(path string) (*mixpanelSummary, error) {
 		recordEvent(extractEventName(row))
 	}
 	return summary, nil
+}
+
+func firstNonSpaceByte(reader *bufio.Reader) (byte, error) {
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		default:
+			return b, nil
+		}
+	}
 }
 
 func extractEventName(row map[string]any) string {

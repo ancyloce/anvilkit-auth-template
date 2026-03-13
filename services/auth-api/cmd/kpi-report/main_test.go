@@ -175,6 +175,65 @@ func TestLoadMixpanelSummaryNDJSONAllowsLargeLines(t *testing.T) {
 	}
 }
 
+func TestLoadMixpanelSummaryCSV(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.csv")
+	content := strings.Join([]string{
+		"event,distinct_id",
+		"verification_registration_started,user-1",
+		"verification_email_sent,user-1",
+		"other_event,user-2",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write csv export: %v", err)
+	}
+
+	summary, err := loadMixpanelSummary(path)
+	if err != nil {
+		t.Fatalf("loadMixpanelSummary: %v", err)
+	}
+	if summary.TotalEvents != 3 {
+		t.Fatalf("TotalEvents=%d want=3", summary.TotalEvents)
+	}
+	if summary.RelevantCount["verification_registration_started"] != 1 {
+		t.Fatalf("verification_registration_started=%d want=1", summary.RelevantCount["verification_registration_started"])
+	}
+	if summary.RelevantCount["verification_email_sent"] != 1 {
+		t.Fatalf("verification_email_sent=%d want=1", summary.RelevantCount["verification_email_sent"])
+	}
+}
+
+func TestLoadMixpanelSummaryJSONArray(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.json")
+	payload := []map[string]any{
+		{"event": "verification_registration_started"},
+		{"event": "verification_email_sent"},
+		{"event": "other_event"},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal json array: %v", err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write json export: %v", err)
+	}
+
+	summary, err := loadMixpanelSummary(path)
+	if err != nil {
+		t.Fatalf("loadMixpanelSummary: %v", err)
+	}
+	if summary.TotalEvents != 3 {
+		t.Fatalf("TotalEvents=%d want=3", summary.TotalEvents)
+	}
+	if summary.RelevantCount["verification_registration_started"] != 1 {
+		t.Fatalf("verification_registration_started=%d want=1", summary.RelevantCount["verification_registration_started"])
+	}
+	if summary.RelevantCount["verification_email_sent"] != 1 {
+		t.Fatalf("verification_email_sent=%d want=1", summary.RelevantCount["verification_email_sent"])
+	}
+}
+
 func stringsJoin(lines ...string) string {
 	return strings.Join(lines, "\n")
 }
