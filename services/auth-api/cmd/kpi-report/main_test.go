@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,6 +140,35 @@ func TestLoadMixpanelSummaryNDJSON(t *testing.T) {
 	}
 	if summary.RelevantCount["verification_registration_started"] != 1 {
 		t.Fatalf("verification_registration_started=%d want=1", summary.RelevantCount["verification_registration_started"])
+	}
+	if summary.RelevantCount["verification_email_sent"] != 1 {
+		t.Fatalf("verification_email_sent=%d want=1", summary.RelevantCount["verification_email_sent"])
+	}
+}
+
+func TestLoadMixpanelSummaryNDJSONAllowsLargeLines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large-events.ndjson")
+
+	line, err := json.Marshal(map[string]any{
+		"event": "verification_email_sent",
+		"properties": map[string]any{
+			"payload": strings.Repeat("x", 80*1024),
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal large event: %v", err)
+	}
+	if err := os.WriteFile(path, append(line, '\n'), 0o600); err != nil {
+		t.Fatalf("write export file: %v", err)
+	}
+
+	summary, err := loadMixpanelSummary(path)
+	if err != nil {
+		t.Fatalf("loadMixpanelSummary: %v", err)
+	}
+	if summary.TotalEvents != 1 {
+		t.Fatalf("TotalEvents=%d want=1", summary.TotalEvents)
 	}
 	if summary.RelevantCount["verification_email_sent"] != 1 {
 		t.Fatalf("verification_email_sent=%d want=1", summary.RelevantCount["verification_email_sent"])

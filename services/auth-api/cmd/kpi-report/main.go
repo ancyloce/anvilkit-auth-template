@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -9,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -431,20 +431,16 @@ func loadMixpanelSummary(path string) (*mixpanelSummary, error) {
 		return summary, nil
 	}
 
-	scanner := bufio.NewScanner(bytes.NewReader(raw))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	for {
 		var row map[string]any
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
+		if err := decoder.Decode(&row); err != nil {
+			if err == io.EOF {
+				break
+			}
 			return nil, err
 		}
 		recordEvent(extractEventName(row))
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	return summary, nil
 }
