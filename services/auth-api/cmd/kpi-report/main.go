@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,7 +57,17 @@ type mixpanelSummary struct {
 
 func main() {
 	cfg := loadConfig()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	// Allow overriding the default timeout via environment variable.
+	// KPI_REPORT_TIMEOUT_SECONDS should be an integer number of seconds.
+	timeout := 10 * time.Second
+	if v := os.Getenv("KPI_REPORT_TIMEOUT_SECONDS"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			timeout = time.Duration(secs) * time.Second
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	rep, err := buildReport(ctx, cfg)
