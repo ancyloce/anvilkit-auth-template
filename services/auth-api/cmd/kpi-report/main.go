@@ -362,6 +362,22 @@ func queryOptionalFloat64(ctx context.Context, db *pgxpool.Pool, query string) (
 	return &result, nil
 }
 
+type eventRow struct {
+	Event     string `json:"event"`
+	EventName string `json:"event_name"`
+	Name      string `json:"name"`
+}
+
+func (e eventRow) normalizedEventName() string {
+	if name := strings.TrimSpace(e.Event); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(e.EventName); name != "" {
+		return name
+	}
+	return strings.TrimSpace(e.Name)
+}
+
 func loadMixpanelSummary(path string) (*mixpanelSummary, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -470,14 +486,14 @@ func loadMixpanelSummary(path string) (*mixpanelSummary, error) {
 	}
 
 	for {
-		var row map[string]any
+		var row eventRow
 		if err := decoder.Decode(&row); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return nil, err
 		}
-		recordEvent(extractEventName(row))
+		recordEvent(row.normalizedEventName())
 	}
 	return summary, nil
 }
