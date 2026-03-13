@@ -16,6 +16,39 @@ import (
 	"anvilkit-auth-template/services/auth-api/internal/testutil"
 )
 
+func TestRegisterEmitsVerificationRegistrationStarted(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	tracker := &fakeAnalytics{}
+	r := newAnalyticsRouter(t, db, rdb, tracker)
+
+	res := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "analytics-register@example.com",
+		"password": "Passw0rd!",
+	})
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", res.Code, http.StatusAccepted, res.Body.String())
+	}
+
+	events := capturedEventsByName(tracker.events, "verification_registration_started")
+	if len(events) != 1 {
+		t.Fatalf("verification_registration_started count=%d want=1 events=%+v", len(events), tracker.events)
+	}
+	event := events[0]
+	if event.Email != "analytics-register@example.com" || event.UserID == "" {
+		t.Fatalf("unexpected event identity: %+v", event)
+	}
+	if event.Properties["flow"] != "register" {
+		t.Fatalf("flow=%v want=register", event.Properties["flow"])
+	}
+	if ttl, ok := event.Properties["verification_ttl_seconds"].(int64); !ok || ttl != 900 {
+		t.Fatalf("verification_ttl_seconds=%v want int64(900)", event.Properties["verification_ttl_seconds"])
+	}
+}
+
 func TestVerifyEmailEmitsAccountActivatedWithOTPMethod(t *testing.T) {
 	db := newTestDB(t)
 	rdb := newTestRedis(t)
@@ -45,13 +78,11 @@ func TestVerifyEmailEmitsAccountActivatedWithOTPMethod(t *testing.T) {
 		t.Fatalf("verify status=%d want=%d body=%s", verifyRes.Code, http.StatusOK, verifyRes.Body.String())
 	}
 
-	if len(tracker.events) != 1 {
-		t.Fatalf("event count=%d want=1", len(tracker.events))
+	events := capturedEventsByName(tracker.events, "account_activated")
+	if len(events) != 1 {
+		t.Fatalf("account_activated count=%d want=1 events=%+v", len(events), tracker.events)
 	}
-	event := tracker.events[0]
-	if event.Name != "account_activated" {
-		t.Fatalf("event name=%q want=account_activated", event.Name)
-	}
+	event := events[0]
 	if event.Email != "analytics-otp@example.com" || event.UserID == "" {
 		t.Fatalf("unexpected event identity: %+v", event)
 	}
@@ -111,13 +142,11 @@ func TestVerifyMagicLinkEmitsClickAndActivationEvents(t *testing.T) {
 		t.Fatalf("verify magic link status=%d want=%d body=%s", w.Code, http.StatusFound, w.Body.String())
 	}
 
-	if len(tracker.events) != 2 {
-		t.Fatalf("event count=%d want=2", len(tracker.events))
+	clickedEvents := capturedEventsByName(tracker.events, "verification_link_clicked")
+	if len(clickedEvents) != 1 {
+		t.Fatalf("verification_link_clicked count=%d want=1 events=%+v", len(clickedEvents), tracker.events)
 	}
-	clicked := tracker.events[0]
-	if clicked.Name != "verification_link_clicked" {
-		t.Fatalf("first event=%q want verification_link_clicked", clicked.Name)
-	}
+	clicked := clickedEvents[0]
 	if clicked.Email != "analytics-magic@example.com" || clicked.UserID == "" {
 		t.Fatalf("unexpected clicked event identity: %+v", clicked)
 	}
@@ -128,10 +157,11 @@ func TestVerifyMagicLinkEmitsClickAndActivationEvents(t *testing.T) {
 	if latency <= 0 {
 		t.Fatalf("latency_from_sent=%d want > 0", latency)
 	}
-	activated := tracker.events[1]
-	if activated.Name != "account_activated" {
-		t.Fatalf("second event=%q want account_activated", activated.Name)
+	activatedEvents := capturedEventsByName(tracker.events, "account_activated")
+	if len(activatedEvents) != 1 {
+		t.Fatalf("account_activated count=%d want=1 events=%+v", len(activatedEvents), tracker.events)
 	}
+	activated := activatedEvents[0]
 	if activated.Properties["method"] != "magic_link" {
 		t.Fatalf("method=%v want magic_link", activated.Properties["method"])
 	}
@@ -183,8 +213,45 @@ where ev.user_id = u.id
 	if w.Code != http.StatusGone {
 		t.Fatalf("verify magic link status=%d want=%d body=%s", w.Code, http.StatusGone, w.Body.String())
 	}
-	if len(tracker.events) != 0 {
-		t.Fatalf("event count=%d want=0 events=%+v", len(tracker.events), tracker.events)
+	if len(capturedEventsByName(tracker.events, "verification_link_clicked")) != 0 {
+		t.Fatalf("verification_link_clicked should not be emitted: %+v", tracker.events)
+	}
+}
+
+func TestVerifyEmailEmitsOTPFailureReason(t *testing.T) {
+	db := newTestDB(t)
+	rdb := newTestRedis(t)
+	testutil.TruncateAuthTables(t, db)
+	testutil.FlushRedisKeys(t, rdb, emailQueueName)
+
+	tracker := &fakeAnalytics{}
+	r := newAnalyticsRouter(t, db, rdb, tracker)
+
+	registerRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/register", map[string]string{
+		"email":    "analytics-otp-failure@example.com",
+		"password": "Passw0rd!",
+	})
+	if registerRes.Code != http.StatusAccepted {
+		t.Fatalf("register status=%d want=%d body=%s", registerRes.Code, http.StatusAccepted, registerRes.Body.String())
+	}
+	if _, err := popQueuedJob(t, rdb); err != nil {
+		t.Fatalf("pop queued job: %v", err)
+	}
+
+	verifyRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{
+		"email": "analytics-otp-failure@example.com",
+		"otp":   "000000",
+	})
+	if verifyRes.Code != http.StatusBadRequest {
+		t.Fatalf("verify status=%d want=%d body=%s", verifyRes.Code, http.StatusBadRequest, verifyRes.Body.String())
+	}
+
+	events := capturedEventsByName(tracker.events, "verification_otp_failed")
+	if len(events) != 1 {
+		t.Fatalf("verification_otp_failed count=%d want=1 events=%+v", len(events), tracker.events)
+	}
+	if events[0].Properties["reason"] != "invalid_otp" {
+		t.Fatalf("reason=%v want=invalid_otp", events[0].Properties["reason"])
 	}
 }
 
@@ -310,4 +377,14 @@ func testContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+func capturedEventsByName(events []capturedEvent, name string) []capturedEvent {
+	filtered := make([]capturedEvent, 0, len(events))
+	for _, event := range events {
+		if event.Name == name {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
 }

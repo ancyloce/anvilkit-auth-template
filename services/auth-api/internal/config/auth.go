@@ -14,6 +14,7 @@ import (
 const (
 	defaultAccessTTLMin     = 15
 	defaultRefreshTTLHours  = 168
+	defaultVerificationTTL  = 15
 	defaultPasswordMinLen   = 8
 	defaultBcryptCost       = 12
 	defaultLoginFailLimit   = 5
@@ -27,6 +28,7 @@ type AuthConfig struct {
 	JWTSecret       string
 	PublicBaseURL   string
 	Analytics       analytics.Config
+	VerificationTTL time.Duration
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
 	PasswordMinLen  int
@@ -54,6 +56,10 @@ func LoadAuthConfigFromEnv() (AuthConfig, error) {
 		return AuthConfig{}, err
 	}
 	refreshTTLHours, err := getPositiveIntFromEnv("REFRESH_TTL_HOURS", defaultRefreshTTLHours)
+	if err != nil {
+		return AuthConfig{}, err
+	}
+	verificationTTLMin, err := getPositiveIntFromEnv("VERIFICATION_TTL_MIN", defaultVerificationTTL)
 	if err != nil {
 		return AuthConfig{}, err
 	}
@@ -91,6 +97,7 @@ func LoadAuthConfigFromEnv() (AuthConfig, error) {
 		JWTSecret:       secret,
 		PublicBaseURL:   publicBaseURL,
 		Analytics:       analyticsCfg,
+		VerificationTTL: time.Duration(verificationTTLMin) * time.Minute,
 		AccessTTL:       time.Duration(accessTTLMin) * time.Minute,
 		RefreshTTL:      time.Duration(refreshTTLHours) * time.Hour,
 		PasswordMinLen:  passwordMinLen,

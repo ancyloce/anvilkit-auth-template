@@ -261,6 +261,9 @@ where ev.user_id = u.id
 		if !strings.Contains(strings.ToLower(w.Body.String()), "expired") {
 			t.Fatalf("expected expired message in body: %s", w.Body.String())
 		}
+		if !strings.Contains(w.Body.String(), formatResendIn(resendVerificationWindow)) {
+			t.Fatalf("expected resend cooldown guidance in body: %s", w.Body.String())
+		}
 	})
 }
 
@@ -303,6 +306,9 @@ func TestEmailVerificationIntegration_CrossDeviceMagicLinkFallsBackToOTP(t *test
 	}
 	if !strings.Contains(crossDeviceRes.Body.String(), "manually enter the 6-digit OTP") {
 		t.Fatalf("fallback page should direct user to OTP entry: %s", crossDeviceRes.Body.String())
+	}
+	if !strings.Contains(crossDeviceRes.Body.String(), formatResendIn(resendVerificationWindow)) {
+		t.Fatalf("fallback page should include resend cooldown guidance: %s", crossDeviceRes.Body.String())
 	}
 
 	verifyOTPRes := performJSONRequest(t, r, http.MethodPost, "/v1/auth/verify-email", map[string]string{

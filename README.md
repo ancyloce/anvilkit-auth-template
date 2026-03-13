@@ -56,6 +56,7 @@ Response `data` returns `tenant` and `owner_user` in unified Envelope format.
 | `REDIS_ADDR` | no | `localhost:6379` | Redis address |
 | `ACCESS_TTL_MIN` | no | `15` | Access token TTL (minutes) |
 | `REFRESH_TTL_HOURS` | no | `168` | Refresh token TTL (hours, default 7 days) |
+| `VERIFICATION_TTL_MIN` | no | `15` | Verification OTP / magic-link expiration window (minutes) |
 | `PASSWORD_MIN_LEN` | no | `8` | Minimum password length |
 | `BCRYPT_COST` | no | `12` | bcrypt cost factor (4–31) |
 | `LOGIN_FAIL_LIMIT` | no | `5` | Failed login rate limit threshold |
@@ -87,6 +88,27 @@ await fetch("http://localhost:8080/api/v1/auth/register", {
   body: JSON.stringify({ email, password }),
 });
 ```
+
+## KPI Report
+
+The repository includes a reproducible KPI report command for the email-verification funnel:
+
+```bash
+make kpi-report
+# or
+go run ./services/auth-api/cmd/kpi-report --db-dsn "$DB_DSN" --mixpanel-export ./exports/mixpanel.ndjson
+```
+
+It reports:
+
+- registration cohort size (`users` with verification rows)
+- verified users
+- Activation Rate
+- median TTV (`users.created_at` -> `users.email_verified_at`)
+- median queued-to-sent latency for verification email
+- bottlenecks from send gaps, non-clicks, and OTP errors
+
+Use the optional `--mixpanel-export` flag with a `.json`, `.ndjson`, or `.csv` export to reconcile database metrics with emitted analytics events.
 
 ## Database Migrations
 

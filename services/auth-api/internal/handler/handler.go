@@ -34,7 +34,7 @@ import (
 const (
 	userStatusActive             int16 = 1
 	emailQueueName                     = "email:send"
-	verificationTTL                    = 15 * time.Minute
+	defaultVerificationTTL             = 15 * time.Minute
 	verificationEmailSubject           = "Verify your email"
 	verificationAcceptedMessage        = "registration accepted, please check your email for verification"
 	bootstrapVerificationMessage       = "bootstrap completed; owner must verify email before login"
@@ -71,6 +71,7 @@ type emailSendJob struct {
 	OTP       string `json:"otp"`
 	MagicLink string `json:"magic_link"`
 	ExpiresIn string `json:"expires_in"`
+	ResendIn  string `json:"resend_in,omitempty"`
 }
 
 type Handler struct {
@@ -81,6 +82,7 @@ type Handler struct {
 	JWTAudience     string
 	JWTSecret       string
 	PublicBaseURL   string
+	VerificationTTL time.Duration
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
 	PasswordMinLen  int
@@ -137,6 +139,7 @@ func (h *Handler) Bootstrap(c *gin.Context) error {
 			return err
 		}
 		setMagicLinkStateCookie(c, magicLinkState, expiresAt)
+		h.trackVerificationRegistrationStarted(c, res.UserID, res.UserEmail, "bootstrap")
 	}
 	message := "ok"
 	if res.NeedsEmailVerification {
@@ -178,6 +181,7 @@ func (h *Handler) Register(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
+	verificationTTL := h.verificationTTL()
 	expiresAt := time.Now().Add(verificationTTL)
 	registered, err := h.Store.RegisterWithVerification(c, email, req.Password, h.BcryptCost, otp, magicToken, expiresAt)
 	if err != nil {
@@ -205,6 +209,7 @@ func (h *Handler) Register(c *gin.Context) error {
 		OTP:       otp,
 		MagicLink: magicLink,
 		ExpiresIn: formatVerificationExpiresIn(verificationTTL),
+		ResendIn:  formatResendIn(resendVerificationWindow),
 	}); err != nil {
 		if cleanupErr := h.Store.CleanupPendingRegistration(c, registered.User.ID); cleanupErr != nil {
 			return fmt.Errorf("enqueue verification email job: %w; cleanup pending registration: %v", err, cleanupErr)
@@ -212,6 +217,7 @@ func (h *Handler) Register(c *gin.Context) error {
 		return err
 	}
 	setMagicLinkStateCookie(c, magicLinkState, expiresAt)
+	h.trackVerificationRegistrationStarted(c, registered.User.ID, registered.User.Email, "register")
 
 	c.JSON(http.StatusAccepted, resp.Envelope{
 		RequestID: c.GetString("request_id"),
@@ -261,6 +267,7 @@ func (h *Handler) ResendVerification(c *gin.Context) error {
 		return err
 	}
 	now := time.Now()
+	verificationTTL := h.verificationTTL()
 	expiresAt := now.Add(verificationTTL)
 
 	resend, err := h.Store.ResendVerification(c, emailAddr, otp, magicToken, expiresAt, now)
@@ -297,6 +304,7 @@ func (h *Handler) ResendVerification(c *gin.Context) error {
 		OTP:       otp,
 		MagicLink: magicLink,
 		ExpiresIn: formatVerificationExpiresIn(verificationTTL),
+		ResendIn:  formatResendIn(resendVerificationWindow),
 	}); err != nil {
 		return rollbackResend(err)
 	}
@@ -326,18 +334,22 @@ func (h *Handler) VerifyEmail(c *gin.Context) error {
 	}
 	otp := strings.TrimSpace(req.OTP)
 	if !otpCodePattern.MatchString(otp) {
+		h.trackVerificationOTPFailure(c, emailAddr, "invalid_otp")
 		return apperr.BadRequest(errors.New("invalid_otp")).WithData(map[string]any{"reason": "invalid_otp"})
 	}
 
 	activatedNow, err := h.Store.VerifyEmailOTP(c, emailAddr, otp, time.Now())
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidVerificationOTP) {
+			h.trackVerificationOTPFailure(c, emailAddr, "invalid_otp")
 			return apperr.BadRequest(err).WithData(map[string]any{"reason": "invalid_otp"})
 		}
 		if errors.Is(err, store.ErrVerificationExpired) {
+			h.trackVerificationOTPFailure(c, emailAddr, "expired_otp")
 			return apperr.BadRequest(err).WithData(map[string]any{"reason": "expired_otp"})
 		}
 		if errors.Is(err, store.ErrTooManyOTPAttempts) {
+			h.trackVerificationOTPFailure(c, emailAddr, "too_many_attempts")
 			return apperr.BadRequest(err).WithData(map[string]any{"reason": "too_many_attempts"})
 		}
 		return err
@@ -402,7 +414,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 				c,
 				http.StatusGone,
 				"Magic link expired",
-				"This verification link has expired. Request a new verification email and enter the OTP manually.",
+				magicLinkExpiredMessage(),
 			)
 			return nil
 		}
@@ -428,7 +440,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 			c,
 			http.StatusOK,
 			"Enter OTP to verify",
-			"This link was opened from a different browser or device. Please return to the original device and manually enter the 6-digit OTP.",
+			crossDeviceOTPMessage(),
 		)
 		return nil
 	}
@@ -449,7 +461,7 @@ func (h *Handler) VerifyMagicLink(c *gin.Context) error {
 				c,
 				http.StatusGone,
 				"Magic link expired",
-				"This verification link has expired. Request a new verification email and enter the OTP manually.",
+				magicLinkExpiredMessage(),
 			)
 			return nil
 		}
@@ -504,6 +516,42 @@ func (h *Handler) track(ctx context.Context, event analytics.Event) {
 	}
 }
 
+func (h *Handler) trackVerificationRegistrationStarted(ctx context.Context, userID, emailAddr, flow string) {
+	h.track(ctx, analytics.Event{
+		Name:      "verification_registration_started",
+		UserID:    userID,
+		Email:     emailAddr,
+		Timestamp: time.Now().UTC(),
+		Properties: map[string]any{
+			"flow":                     strings.TrimSpace(flow),
+			"verification_ttl_seconds": int64(h.verificationTTL() / time.Second),
+		},
+	})
+}
+
+func (h *Handler) trackVerificationOTPFailure(ctx context.Context, emailAddr, reason string) {
+	if h.Analytics == nil {
+		return
+	}
+	var userID string
+	user, err := h.Store.LookupAnalyticsUserByEmail(ctx, emailAddr)
+	if err == nil {
+		userID = user.UserID
+		emailAddr = user.Email
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		log.Printf("auth-api analytics: lookup otp failure user email=%q: %v", emailAddr, err)
+	}
+	h.track(ctx, analytics.Event{
+		Name:      "verification_otp_failed",
+		UserID:    userID,
+		Email:     emailAddr,
+		Timestamp: time.Now().UTC(),
+		Properties: map[string]any{
+			"reason": strings.TrimSpace(reason),
+		},
+	})
+}
+
 func maxInt64(a, b int64) int64 {
 	if a > b {
 		return a
@@ -529,7 +577,10 @@ func buildMagicLinkSuccessURL(publicBaseURL string) string {
 func setMagicLinkStateCookie(c *gin.Context, state string, expiresAt time.Time) {
 	maxAge := int(time.Until(expiresAt).Seconds())
 	if maxAge <= 0 {
-		maxAge = int(verificationTTL.Seconds())
+		// If the computed expiry is already in the past, do not extend the cookie
+		// beyond the verification window. Use a minimal max-age so it expires
+		// immediately (or almost immediately).
+		maxAge = 1
 	}
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(magicLinkStateCookieName, state, maxAge, "/", "", isSecureRequest(c), true)
@@ -612,6 +663,35 @@ func formatVerificationExpiresIn(ttl time.Duration) string {
 	return fmt.Sprintf("%d minutes", minutes)
 }
 
+func formatResendIn(delay time.Duration) string {
+	seconds := int(delay.Round(time.Second) / time.Second)
+	if seconds <= 1 {
+		return "1 second"
+	}
+	return fmt.Sprintf("%d seconds", seconds)
+}
+
+func magicLinkExpiredMessage() string {
+	return fmt.Sprintf(
+		"This verification link has expired. Request a new verification email after %s and enter the OTP manually if needed.",
+		formatResendIn(resendVerificationWindow),
+	)
+}
+
+func crossDeviceOTPMessage() string {
+	return fmt.Sprintf(
+		"This link was opened from a different browser or device. Please return to the original device and manually enter the 6-digit OTP. If you still need another email, wait %s before requesting a resend.",
+		formatResendIn(resendVerificationWindow),
+	)
+}
+
+func (h *Handler) verificationTTL() time.Duration {
+	if h.VerificationTTL <= 0 {
+		return defaultVerificationTTL
+	}
+	return h.VerificationTTL
+}
+
 func (h *Handler) enqueueVerificationEmail(c *gin.Context, userID, email string) (string, time.Time, error) {
 	otp, err := commonemail.GenerateOTP()
 	if err != nil {
@@ -625,6 +705,7 @@ func (h *Handler) enqueueVerificationEmail(c *gin.Context, userID, email string)
 	if err != nil {
 		return "", time.Time{}, err
 	}
+	verificationTTL := h.verificationTTL()
 	expiresAt := time.Now().Add(verificationTTL)
 	created, err := h.Store.CreateVerification(c, store.CreateVerificationParams{
 		UserID:     userID,
@@ -650,6 +731,7 @@ func (h *Handler) enqueueVerificationEmail(c *gin.Context, userID, email string)
 		OTP:       otp,
 		MagicLink: magicLink,
 		ExpiresIn: formatVerificationExpiresIn(verificationTTL),
+		ResendIn:  formatResendIn(resendVerificationWindow),
 	}); err != nil {
 		return "", time.Time{}, err
 	}

@@ -108,6 +108,7 @@ func newTestAuthHandler(t *testing.T, db *pgxpool.Pool, rdb *goredis.Client) *Ha
 		JWTAudience:     "anvilkit-clients",
 		JWTSecret:       mustJWTSecret(t),
 		PublicBaseURL:   "http://auth.example.com",
+		VerificationTTL: 15 * time.Minute,
 		AccessTTL:       15 * time.Minute,
 		RefreshTTL:      168 * time.Hour,
 		PasswordMinLen:  8,

@@ -27,9 +27,10 @@ type Store struct {
 }
 
 type AnalyticsRecord struct {
-	UserID string
-	Email  string
-	SentAt *time.Time
+	UserID   string
+	Email    string
+	QueuedAt time.Time
+	SentAt   *time.Time
 }
 
 func (s *Store) MarkSent(ctx context.Context, recordID, externalID string) error {
@@ -264,6 +265,7 @@ func (s *Store) lookupAnalyticsRecord(ctx context.Context, predicate string, val
 select
   er.user_id,
   er.to_email,
+  er.created_at,
   (
     select esh.created_at
     from email_status_history esh
@@ -277,7 +279,7 @@ where `+predicate+`
 order by er.updated_at desc, er.created_at desc, er.id desc
 limit 1`,
 		value,
-	).Scan(&userID, &record.Email, &record.SentAt)
+	).Scan(&userID, &record.Email, &record.QueuedAt, &record.SentAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrEmailRecordNotFound
